@@ -5,7 +5,7 @@ import time
 
 app = Flask(__name__)
 
-TWELVE_KEY = "bce405b049d24b2fb7c7c709f92b0f7b"
+TWELVE_KEY = "8a118b37963347c0941f8736b2aaf6c2"
 ALPHA_KEY = "WJ7ZFIBBMPUTCIAY"
 
 HTML = """
