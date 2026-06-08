@@ -30,7 +30,7 @@ def get_data(endpoint, symbol, interval, extra=""):
 
 def get_candles(symbol, interval):
     try:
-        url = f"https://api.twelvedata.com/time_series?symbol={symbol}&interval={interval}&outputsize=20&apikey={TWELVE_KEY}"
+        url = f"https://api.twelvedata.com/time_series?symbol={symbol}&interval={interval}&outputsize=50&apikey={TWELVE_KEY}"
         r = requests.get(url)
         time.sleep(2)
         return r.json().get("values", [])
@@ -156,14 +156,15 @@ def get_tf_score(symbol, interval, price):
             bb_signal = "NEUTRAL"
         indicators["bbands"] = {"signal": bb_signal}
 
+    # Support & Resistance from candles
     candles = get_candles(symbol, interval)
     support = 0
     resistance = 0
-    if candles:
-        highs = sorted([float(c["high"]) for c in candles[:20]], reverse=True)
-        lows = sorted([float(c["low"]) for c in candles[:20]])
-        resistance = round(sum(highs[:3]) / 3, 2)
-        support = round(sum(lows[:3]) / 3, 2)
+    if candles and len(candles) >= 10:
+        highs = [float(c["high"]) for c in candles[:30]]
+        lows = [float(c["low"]) for c in candles[:30]]
+        resistance = round(max(highs), 2)
+        support = round(min(lows), 2)
         max_score += 10
         if len(candles) > 5:
             all_highs = [float(c["high"]) for c in candles[1:]]
@@ -201,7 +202,6 @@ body{background:#0d1117;color:#fff;font-family:Arial}
 .header{background:#161b22;padding:15px;text-align:center;border-bottom:2px solid #00ff88}
 .header h1{color:#00ff88;font-size:22px}
 .header p{color:#888;font-size:12px;margin-top:3px}
-.countdown{color:#3b82f6;font-size:12px;margin-top:4px}
 .container{max-width:900px;margin:15px auto;padding:12px}
 .section{background:#161b22;border-radius:10px;padding:15px;margin-bottom:12px;border:1px solid #30363d}
 .section h2{color:#00ff88;margin-bottom:12px;font-size:15px}
@@ -226,7 +226,6 @@ body{background:#0d1117;color:#fff;font-family:Arial}
 .info-card label{color:#888;font-size:11px}
 .info-card p{font-size:15px;font-weight:bold;margin-top:3px}
 .tf-card{background:#0d1117;border-radius:8px;padding:10px;text-align:center;border:1px solid #30363d}
-.tf-card h4{color:#888;font-size:11px}
 .ind-card{background:#0d1117;border-radius:6px;padding:8px;border:1px solid #30363d;display:flex;justify-content:space-between;align-items:center;margin:4px 0}
 .ind-name{color:#888;font-size:11px}
 .ind-val{font-size:12px;font-weight:bold}
@@ -262,7 +261,6 @@ body{background:#0d1117;color:#fff;font-family:Arial}
 <div class="header">
 <h1>Advanced Trading Bot</h1>
 <p>TradingView Style + Multi Timeframe + Smart Confidence</p>
-<div class="countdown">Auto refresh: <span id="countdown">60</span>s</div>
 </div>
 <div class="container">
 <div class="section">
@@ -313,9 +311,6 @@ let selectedTFs=[];
 let signalHistory=[];
 let wins=0;
 let total=0;
-let autoTimer=null;
-let countdown=60;
-startCountdown();
 
 function togglePair(btn,symbol,name,news){
 const exists=selectedPairs.findIndex(p=>p.symbol===symbol);
@@ -367,7 +362,7 @@ if(inds.macd){const mc=inds.macd.signal==='BUY'?'buy-c':'sell-c';indHtml+=`<div 
 if(inds.ema20){const ec=inds.ema20.signal==='BUY'?'buy-c':'sell-c';indHtml+=`<div class="ind-card"><span class="ind-name">EMA 20</span><span class="ind-val ${ec}">${inds.ema20.value} - ${inds.ema20.signal}</span></div>`;}
 if(inds.ema50){const ec=inds.ema50.signal==='BUY'?'buy-c':'sell-c';indHtml+=`<div class="ind-card"><span class="ind-name">EMA 50</span><span class="ind-val ${ec}">${inds.ema50.value} - ${inds.ema50.signal}</span></div>`;}
 if(inds.stoch){const sc=inds.stoch.signal==='BUY'?'buy-c':inds.stoch.signal==='SELL'?'sell-c':'neutral-c';indHtml+=`<div class="ind-card"><span class="ind-name">Stoch</span><span class="ind-val ${sc}">${inds.stoch.value} - ${inds.stoch.signal}</span></div>`;}
-if(inds.bbands){const bc=inds.bbands.signal==='BUY'?'buy-c':'sell-c';indHtml+=`<div class="ind-card"><span class="ind-name">Bollinger</span><span class="ind-val ${bc}">${inds.bbands.signal}</span></div>`;}
+if(inds.bbands){const bc=inds.bbands.signal==='BUY'?'buy-c':inds.bbands.signal==='SELL'?'sell-c':'neutral-c';indHtml+=`<div class="ind-card"><span class="ind-name">Bollinger</span><span class="ind-val ${bc}">${inds.bbands.signal}</span></div>`;}
 if(inds.liquidity){indHtml+=`<div class="ind-card"><span class="ind-name">Liquidity</span><span class="ind-val">${inds.liquidity.signal}</span></div>`;}
 let newsHtml='';
 if(result.headlines&&result.headlines.length>0){newsHtml='<div style="margin-top:8px;"><p style="color:#888;font-size:11px;margin-bottom:5px;">Latest News:</p>';for(const h of result.headlines){newsHtml+=`<div class="news-item">- ${h}</div>`;}newsHtml+='</div>';}
@@ -402,11 +397,6 @@ function updateHistory(){
 const tbody=document.getElementById('historyBody');
 if(signalHistory.length===0){tbody.innerHTML='<tr><td colspan="5" style="text-align:center;color:#888;padding:15px;">No signals yet</td></tr>';return;}
 tbody.innerHTML=signalHistory.map(s=>{const sc=s.signal.includes('BUY')?'buy-c':s.signal.includes('SELL')?'sell-c':'neutral-c';return `<tr><td>${s.time}</td><td>${s.pair}</td><td class="${sc}">${s.signal}</td><td>${s.conf}%</td><td>${s.result}</td></tr>`;}).join('');
-}
-
-function startCountdown(){
-clearInterval(autoTimer);countdown=60;
-autoTimer=setInterval(()=>{countdown--;document.getElementById('countdown').textContent=countdown;if(countdown<=0){countdown=60;if(selectedPairs.length>0&&selectedTFs.length>0)analyze();}},1000);
 }
 </script>
 </body>
@@ -478,10 +468,10 @@ def analyze_route():
             tp3 = round(price - (atr * 5), 2) if atr > 0 else round(price * 0.94, 2)
         else:
             final_signal = "NEUTRAL - WAIT"
-            sl = round(price * 0.98, 2)
-            tp1 = round(price * 1.02, 2)
-            tp2 = round(price * 1.04, 2)
-            tp3 = round(price * 1.06, 2)
+            sl = round(price * 0.99, 2)
+            tp1 = round(price * 1.01, 2)
+            tp2 = round(price * 1.02, 2)
+            tp3 = round(price * 1.03, 2)
 
         support = all_indicators.get("support", 0)
         resistance = all_indicators.get("resistance", 0)
