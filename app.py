@@ -268,8 +268,8 @@ body{background:#0d1117;color:#fff;font-family:Arial}
 <div class="grid2">
 <button class="btn btn-pair" onclick="togglePair(this,'XAU/USD','GOLD','XAUUSD')">Gold</button>
 <button class="btn btn-pair" onclick="togglePair(this,'BTC/USD','BITCOIN','CRYPTO:BTC')">Bitcoin</button>
-<button class="btn btn-pair" onclick="togglePair(this,'XAG/USD','SILVER','XAGUSD')">Silver</button>
-<button class="btn btn-pair" onclick="togglePair(this,'WTI/USD','CRUDE OIL','WTI')">Crude Oil</button>
+<button class="btn btn-pair" onclick="togglePair(this,'SILVER','SILVER','XAGUSD')">Silver</button>
+<button class="btn btn-pair" onclick="togglePair(this,'USOIL','CRUDE OIL','WTI')">Crude Oil</button>
 </div>
 </div>
 <div class="section">
