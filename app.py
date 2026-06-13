@@ -3,6 +3,7 @@ import requests
 from textblob import TextBlob
 import time
 import os
+import math
 
 TWELVE_KEY = "8a118b37963347c0941f8736b2aaf6c2"
 ALPHA_KEY = "WJ7ZFIBBMPUTCIAY"
@@ -28,9 +29,9 @@ def get_data(endpoint, symbol, interval, extra=""):
     except:
         return None
 
-def get_candles(symbol, interval):
+def get_candles(symbol, interval, size=50):
     try:
-        url = f"https://api.twelvedata.com/time_series?symbol={symbol}&interval={interval}&outputsize=50&apikey={TWELVE_KEY}"
+        url = f"https://api.twelvedata.com/time_series?symbol={symbol}&interval={interval}&outputsize={size}&apikey={TWELVE_KEY}"
         r = requests.get(url)
         time.sleep(2)
         return r.json().get("values", [])
@@ -64,123 +65,465 @@ def get_news(keyword):
     except:
         return [], "Neutral"
 
+def calc_supertrend(candles, period=7, multiplier=3):
+    try:
+        if len(candles) < period + 1:
+            return "N/A"
+        
+        highs = [float(c["high"]) for c in candles]
+        lows = [float(c["low"]) for c in candles]
+        closes = [float(c["close"]) for c in candles]
+        
+        # ATR calculation
+        tr_list = []
+        for i in range(1, len(candles)):
+            tr = max(highs[i] - lows[i], 
+                    abs(highs[i] - closes[i-1]), 
+                    abs(lows[i] - closes[i-1]))
+            tr_list.append(tr)
+        
+        atr = sum(tr_list[:period]) / period
+        
+        hl2 = (highs[0] + lows[0]) / 2
+        upper = hl2 + multiplier * atr
+        lower = hl2 - multiplier * atr
+        
+        if closes[0] > lower:
+            return "BUY"
+        else:
+            return "SELL"
+    except:
+        return "N/A"
+
+def calc_parabolic_sar(candles):
+    try:
+        if len(candles) < 5:
+            return "N/A"
+        closes = [float(c["close"]) for c in candles]
+        highs = [float(c["high"]) for c in candles]
+        lows = [float(c["low"]) for c in candles]
+        
+        if closes[0] > closes[1] and closes[1] > closes[2]:
+            trend = "UP"
+        elif closes[0] < closes[1] and closes[1] < closes[2]:
+            trend = "DOWN"
+        else:
+            trend = "NEUTRAL"
+        
+        sar = lows[1] if trend == "UP" else highs[1]
+        
+        if trend == "UP" and closes[0] > sar:
+            return "BUY"
+        elif trend == "DOWN" and closes[0] < sar:
+            return "SELL"
+        else:
+            return "NEUTRAL"
+    except:
+        return "N/A"
+
+def calc_pivot_points(candles):
+    try:
+        if len(candles) < 2:
+            return {}
+        prev = candles[1]
+        high = float(prev["high"])
+        low = float(prev["low"])
+        close = float(prev["close"])
+        
+        pp = round((high + low + close) / 3, 2)
+        r1 = round(2 * pp - low, 2)
+        r2 = round(pp + (high - low), 2)
+        s1 = round(2 * pp - high, 2)
+        s2 = round(pp - (high - low), 2)
+        
+        return {"pp": pp, "r1": r1, "r2": r2, "s1": s1, "s2": s2}
+    except:
+        return {}
+
+def calc_fibonacci(candles):
+    try:
+        if len(candles) < 20:
+            return {}
+        highs = [float(c["high"]) for c in candles[:20]]
+        lows = [float(c["low"]) for c in candles[:20]]
+        high = max(highs)
+        low = min(lows)
+        diff = high - low
+        
+        return {
+            "f236": round(high - 0.236 * diff, 2),
+            "f382": round(high - 0.382 * diff, 2),
+            "f500": round(high - 0.500 * diff, 2),
+            "f618": round(high - 0.618 * diff, 2),
+            "f786": round(high - 0.786 * diff, 2)
+        }
+    except:
+        return {}
+
+def calc_order_blocks(candles, price):
+    try:
+        if len(candles) < 5:
+            return "N/A", 0, 0
+        
+        bull_ob = 0
+        bear_ob = 0
+        
+        for i in range(1, min(10, len(candles)-1)):
+            curr_close = float(candles[i]["close"])
+            curr_open = float(candles[i]["open"])
+            prev_close = float(candles[i+1]["close"])
+            
+            # Bullish Order Block
+            if curr_close > curr_open * 1.001 and prev_close < float(candles[i+1]["open"]):
+                bull_ob = float(candles[i]["low"])
+            
+            # Bearish Order Block
+            if curr_close < curr_open * 0.999 and prev_close > float(candles[i+1]["open"]):
+                bear_ob = float(candles[i]["high"])
+        
+        if bull_ob > 0 and price > bull_ob:
+            return "BULLISH OB", round(bull_ob, 2), round(bear_ob, 2)
+        elif bear_ob > 0 and price < bear_ob:
+            return "BEARISH OB", round(bull_ob, 2), round(bear_ob, 2)
+        else:
+            return "NO OB", round(bull_ob, 2), round(bear_ob, 2)
+    except:
+        return "N/A", 0, 0
+
+def calc_fair_value_gap(candles):
+    try:
+        if len(candles) < 3:
+            return "N/A", 0, 0
+        
+        for i in range(len(candles) - 2):
+            high_prev = float(candles[i+2]["high"])
+            low_next = float(candles[i]["low"])
+            high_next = float(candles[i]["high"])
+            low_prev = float(candles[i+2]["low"])
+            
+            # Bullish FVG
+            if low_next > high_prev:
+                return "BULLISH FVG", round(high_prev, 2), round(low_next, 2)
+            
+            # Bearish FVG
+            if high_next < low_prev:
+                return "BEARISH FVG", round(high_next, 2), round(low_prev, 2)
+        
+        return "NO FVG", 0, 0
+    except:
+        return "N/A", 0, 0
+
+def calc_smart_money(candles, price):
+    try:
+        if len(candles) < 10:
+            return "N/A"
+        
+        closes = [float(c["close"]) for c in candles[:10]]
+        highs = [float(c["high"]) for c in candles[:10]]
+        lows = [float(c["low"]) for c in candles[:10]]
+        
+        # Break of Structure
+        recent_high = max(highs[1:5])
+        recent_low = min(lows[1:5])
+        
+        if price > recent_high:
+            return "BOS BULLISH"
+        elif price < recent_low:
+            return "BOS BEARISH"
+        
+        # Change of Character
+        if closes[0] > closes[2] and closes[2] < closes[4]:
+            return "CHoCH BULLISH"
+        elif closes[0] < closes[2] and closes[2] > closes[4]:
+            return "CHoCH BEARISH"
+        
+        return "NEUTRAL"
+    except:
+        return "N/A"
+
+def calc_obv(candles):
+    try:
+        if len(candles) < 5:
+            return "N/A"
+        
+        obv = 0
+        obv_values = []
+        
+        for i in range(len(candles)-1, -1, -1):
+            vol = float(candles[i].get("volume", 0))
+            if i < len(candles) - 1:
+                if float(candles[i]["close"]) > float(candles[i+1]["close"]):
+                    obv += vol
+                elif float(candles[i]["close"]) < float(candles[i+1]["close"]):
+                    obv -= vol
+            obv_values.append(obv)
+        
+        if len(obv_values) >= 3:
+            if obv_values[0] > obv_values[1] > obv_values[2]:
+                return "BUY"
+            elif obv_values[0] < obv_values[1] < obv_values[2]:
+                return "SELL"
+        
+        return "NEUTRAL"
+    except:
+        return "N/A"
+
+def calc_mfi(candles, period=14):
+    try:
+        if len(candles) < period + 1:
+            return 50
+        
+        pos_flow = 0
+        neg_flow = 0
+        
+        for i in range(period):
+            tp = (float(candles[i]["high"]) + float(candles[i]["low"]) + float(candles[i]["close"])) / 3
+            tp_prev = (float(candles[i+1]["high"]) + float(candles[i+1]["low"]) + float(candles[i+1]["close"])) / 3
+            vol = float(candles[i].get("volume", 0))
+            
+            if tp > tp_prev:
+                pos_flow += tp * vol
+            else:
+                neg_flow += tp * vol
+        
+        if neg_flow == 0:
+            return 100
+        
+        mfi = 100 - (100 / (1 + pos_flow / neg_flow))
+        return round(mfi, 1)
+    except:
+        return 50
+
+def calc_volume_spike(candles):
+    try:
+        if len(candles) < 10:
+            return "N/A"
+        
+        volumes = [float(c.get("volume", 0)) for c in candles[:10]]
+        avg_vol = sum(volumes[1:]) / (len(volumes) - 1)
+        curr_vol = volumes[0]
+        
+        if avg_vol == 0:
+            return "N/A"
+        
+        ratio = curr_vol / avg_vol
+        
+        if ratio > 2:
+            return f"HIGH SPIKE ({ratio:.1f}x)"
+        elif ratio > 1.5:
+            return f"SPIKE ({ratio:.1f}x)"
+        elif ratio < 0.5:
+            return "LOW VOLUME"
+        else:
+            return f"NORMAL ({ratio:.1f}x)"
+    except:
+        return "N/A"
+
 def get_tf_score(symbol, interval, price):
     weighted_score = 0
     max_score = 0
     indicators = {}
 
+    # RSI
     d = get_data("rsi", symbol, interval)
     if d:
         rsi = float(d["rsi"])
-        max_score += 25
+        max_score += 15
         if rsi < 30:
-            weighted_score += 25
-            rsi_signal = "BUY"
-        elif rsi > 70:
-            weighted_score -= 25
-            rsi_signal = "SELL"
-        elif rsi < 45:
             weighted_score += 15
             rsi_signal = "BUY"
-        elif rsi > 55:
+        elif rsi > 70:
             weighted_score -= 15
+            rsi_signal = "SELL"
+        elif rsi < 45:
+            weighted_score += 8
+            rsi_signal = "BUY"
+        elif rsi > 55:
+            weighted_score -= 8
             rsi_signal = "SELL"
         else:
             rsi_signal = "NEUTRAL"
         indicators["rsi"] = {"value": round(rsi, 1), "signal": rsi_signal}
 
+    # MACD
     d = get_data("macd", symbol, interval)
     if d:
         macd = float(d["macd"])
         macd_sig = float(d["macd_signal"])
         diff = macd - macd_sig
-        max_score += 20
+        max_score += 12
         if diff > 0:
-            weighted_score += 20
+            weighted_score += 12
             macd_signal = "BUY"
         else:
-            weighted_score -= 20
+            weighted_score -= 12
             macd_signal = "SELL"
         indicators["macd"] = {"signal": macd_signal}
 
+    # EMA 20
     d = get_data("ema", symbol, interval, "&time_period=20")
     if d:
         ema20 = float(d["ema"])
-        max_score += 10
+        max_score += 8
         if price > ema20:
-            weighted_score += 10
+            weighted_score += 8
             ema20_signal = "BUY"
         else:
-            weighted_score -= 10
+            weighted_score -= 8
             ema20_signal = "SELL"
         indicators["ema20"] = {"value": round(ema20, 2), "signal": ema20_signal}
 
+    # EMA 50
     d = get_data("ema", symbol, interval, "&time_period=50")
     if d:
         ema50 = float(d["ema"])
-        max_score += 10
+        max_score += 8
         if price > ema50:
-            weighted_score += 10
+            weighted_score += 8
             ema50_signal = "BUY"
         else:
-            weighted_score -= 10
+            weighted_score -= 8
             ema50_signal = "SELL"
         indicators["ema50"] = {"value": round(ema50, 2), "signal": ema50_signal}
 
+    # Stochastic
     d = get_data("stoch", symbol, interval)
     if d:
         stoch_k = float(d["slow_k"])
-        max_score += 15
+        max_score += 10
         if stoch_k < 20:
-            weighted_score += 15
+            weighted_score += 10
             stoch_signal = "BUY"
         elif stoch_k > 80:
-            weighted_score -= 15
+            weighted_score -= 10
             stoch_signal = "SELL"
         else:
             stoch_signal = "NEUTRAL"
         indicators["stoch"] = {"value": round(stoch_k, 1), "signal": stoch_signal}
 
+    # Bollinger Bands
     d = get_data("bbands", symbol, interval)
     if d:
         upper = float(d["upper_band"])
         lower = float(d["lower_band"])
-        max_score += 10
+        max_score += 8
         if price < lower:
-            weighted_score += 10
+            weighted_score += 8
             bb_signal = "BUY"
         elif price > upper:
-            weighted_score -= 10
+            weighted_score -= 8
             bb_signal = "SELL"
         else:
             bb_signal = "NEUTRAL"
         indicators["bbands"] = {"signal": bb_signal}
 
-    # Support & Resistance from candles
-    candles = get_candles(symbol, interval)
-    support = 0
-    resistance = 0
-    if candles and len(candles) >= 10:
-        highs = [float(c["high"]) for c in candles[:30]]
-        lows = [float(c["low"]) for c in candles[:30]]
-        resistance = round(max(highs), 2)
-        support = round(min(lows), 2)
+    # Candle-based calculations
+    candles = get_candles(symbol, interval, 50)
+
+    if candles:
+        highs = sorted([float(c["high"]) for c in candles[:30]], reverse=True)
+        lows = sorted([float(c["low"]) for c in candles[:30]])
+        resistance = round(max([float(c["high"]) for c in candles[:30]]), 2)
+        support = round(min([float(c["low"]) for c in candles[:30]]), 2)
+        indicators["support"] = support
+        indicators["resistance"] = resistance
+
+        # Supertrend
+        st_signal = calc_supertrend(candles)
         max_score += 10
+        if st_signal == "BUY":
+            weighted_score += 10
+        elif st_signal == "SELL":
+            weighted_score -= 10
+        indicators["supertrend"] = {"signal": st_signal}
+
+        # Parabolic SAR
+        sar_signal = calc_parabolic_sar(candles)
+        max_score += 8
+        if sar_signal == "BUY":
+            weighted_score += 8
+        elif sar_signal == "SELL":
+            weighted_score -= 8
+        indicators["psar"] = {"signal": sar_signal}
+
+        # Pivot Points
+        pivots = calc_pivot_points(candles)
+        indicators["pivots"] = pivots
+
+        # Fibonacci
+        fib = calc_fibonacci(candles)
+        indicators["fibonacci"] = fib
+
+        # Order Blocks
+        ob_signal, bull_ob, bear_ob = calc_order_blocks(candles, price)
+        max_score += 8
+        if "BULLISH" in ob_signal:
+            weighted_score += 8
+        elif "BEARISH" in ob_signal:
+            weighted_score -= 8
+        indicators["order_blocks"] = {"signal": ob_signal, "bull": bull_ob, "bear": bear_ob}
+
+        # Fair Value Gap
+        fvg_signal, fvg_low, fvg_high = calc_fair_value_gap(candles)
+        max_score += 6
+        if "BULLISH" in fvg_signal:
+            weighted_score += 6
+        elif "BEARISH" in fvg_signal:
+            weighted_score -= 6
+        indicators["fvg"] = {"signal": fvg_signal, "low": fvg_low, "high": fvg_high}
+
+        # Smart Money
+        smc_signal = calc_smart_money(candles, price)
+        max_score += 8
+        if "BULLISH" in smc_signal:
+            weighted_score += 8
+        elif "BEARISH" in smc_signal:
+            weighted_score -= 8
+        indicators["smc"] = {"signal": smc_signal}
+
+        # OBV
+        obv_signal = calc_obv(candles)
+        max_score += 6
+        if obv_signal == "BUY":
+            weighted_score += 6
+        elif obv_signal == "SELL":
+            weighted_score -= 6
+        indicators["obv"] = {"signal": obv_signal}
+
+        # MFI
+        mfi_val = calc_mfi(candles)
+        max_score += 6
+        if mfi_val < 20:
+            weighted_score += 6
+            mfi_signal = "BUY"
+        elif mfi_val > 80:
+            weighted_score -= 6
+            mfi_signal = "SELL"
+        else:
+            mfi_signal = "NEUTRAL"
+        indicators["mfi"] = {"value": mfi_val, "signal": mfi_signal}
+
+        # Volume Spike
+        vol_spike = calc_volume_spike(candles)
+        indicators["volume"] = {"signal": vol_spike}
+
+        # Liquidity Sweep
+        max_score += 7
         if len(candles) > 5:
             all_highs = [float(c["high"]) for c in candles[1:]]
             all_lows = [float(c["low"]) for c in candles[1:]]
             if float(candles[0]["low"]) < min(all_lows) and price > min(all_lows):
-                weighted_score += 10
+                weighted_score += 7
                 liq_signal = "BULLISH SWEEP"
             elif float(candles[0]["high"]) > max(all_highs) and price < max(all_highs):
-                weighted_score -= 10
+                weighted_score -= 7
                 liq_signal = "BEARISH SWEEP"
             else:
                 liq_signal = "NO SWEEP"
             indicators["liquidity"] = {"signal": liq_signal}
-
-    indicators["support"] = support
-    indicators["resistance"] = resistance
+    else:
+        indicators["support"] = 0
+        indicators["resistance"] = 0
 
     if max_score > 0:
         confidence = round(((weighted_score + max_score) / (2 * max_score)) * 100)
@@ -225,7 +568,6 @@ body{background:#0d1117;color:#fff;font-family:Arial}
 .info-card{background:#0d1117;border-radius:8px;padding:10px;border:1px solid #30363d}
 .info-card label{color:#888;font-size:11px}
 .info-card p{font-size:15px;font-weight:bold;margin-top:3px}
-.tf-card{background:#0d1117;border-radius:8px;padding:10px;text-align:center;border:1px solid #30363d}
 .ind-card{background:#0d1117;border-radius:6px;padding:8px;border:1px solid #30363d;display:flex;justify-content:space-between;align-items:center;margin:4px 0}
 .ind-name{color:#888;font-size:11px}
 .ind-val{font-size:12px;font-weight:bold}
@@ -255,12 +597,21 @@ body{background:#0d1117;color:#fff;font-family:Arial}
 .sr-card{background:#0d1117;border-radius:8px;padding:10px;border:1px solid #30363d;text-align:center}
 .sr-card label{color:#888;font-size:11px}
 .sr-card p{font-size:15px;font-weight:bold;margin-top:3px}
+.fib-grid{display:grid;grid-template-columns:repeat(3,1fr);gap:6px;margin:8px 0}
+.fib-card{background:#0d1117;border-radius:6px;padding:8px;border:1px solid #30363d;text-align:center}
+.fib-card label{color:#f59e0b;font-size:10px}
+.fib-card p{font-size:12px;font-weight:bold;margin-top:2px}
+.pivot-grid{display:grid;grid-template-columns:repeat(3,1fr);gap:6px;margin:8px 0}
+.pivot-card{background:#0d1117;border-radius:6px;padding:8px;border:1px solid #30363d;text-align:center}
+.pivot-card label{color:#888;font-size:10px}
+.pivot-card p{font-size:12px;font-weight:bold;margin-top:2px}
+.section-title{color:#3b82f6;font-size:13px;margin:10px 0 5px 0;font-weight:bold}
 </style>
 </head>
 <body>
 <div class="header">
 <h1>Advanced Trading Bot</h1>
-<p>TradingView Style + Multi Timeframe + Smart Confidence</p>
+<p>20+ Indicators | Smart Money | Volume | Price Action</p>
 </div>
 <div class="container">
 <div class="section">
@@ -268,8 +619,8 @@ body{background:#0d1117;color:#fff;font-family:Arial}
 <div class="grid2">
 <button class="btn btn-pair" onclick="togglePair(this,'XAU/USD','GOLD','XAUUSD')">Gold</button>
 <button class="btn btn-pair" onclick="togglePair(this,'BTC/USD','BITCOIN','CRYPTO:BTC')">Bitcoin</button>
-<button class="btn btn-pair" onclick="togglePair(this,'SILVER','SILVER','XAGUSD')">Silver</button>
-<button class="btn btn-pair" onclick="togglePair(this,'USOIL','CRUDE OIL','WTI')">Crude Oil</button>
+<button class="btn btn-pair" onclick="togglePair(this,'SLV','SILVER','XAGUSD')">Silver</button>
+<button class="btn btn-pair" onclick="togglePair(this,'USO','CRUDE OIL','WTI')">Crude Oil</button>
 </div>
 </div>
 <div class="section">
@@ -339,40 +690,125 @@ if(sig.includes('SELL'))return 'sell-c';
 return 'neutral-c';
 }
 
+function getSigColor(sig){
+if(!sig)return '';
+const s=sig.toUpperCase();
+if(s.includes('BUY')||s.includes('BULLISH'))return 'buy-c';
+if(s.includes('SELL')||s.includes('BEARISH'))return 'sell-c';
+return 'neutral-c';
+}
+
 async function analyze(){
 if(selectedPairs.length===0){alert('Select a pair!');return;}
 if(selectedTFs.length===0){alert('Select a timeframe!');return;}
-document.getElementById('results').innerHTML='<div class="loading"><div class="spinner"></div><p style="color:#888;">Analyzing...</p></div>';
+document.getElementById('results').innerHTML='<div class="loading"><div class="spinner"></div><p style="color:#888;">Analyzing 20+ indicators...</p></div>';
 try{
 const response=await fetch('/analyze',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({pairs:selectedPairs,timeframes:selectedTFs})});
 const data=await response.json();
 let html='';
 for(const result of data.results){
 if(result.error){html+=`<div class="pair-result"><div class="pair-header"><h3>${result.name}</h3></div><div style="padding:15px;color:#ef4444;">No data found</div></div>`;continue;}
+
 let consensusHtml='<div class="consensus">';
 for(const tf of result.timeframes){
 const col=getTFColor(tf.signal);
 consensusHtml+=`<div class="con-item"><div class="con-tf">${tf.label}</div><div class="con-sig ${col}">${tf.signal}</div><div style="font-size:10px;color:#888;">${tf.confidence}%</div></div>`;
 }
 consensusHtml+='</div>';
-let indHtml='';
+
 const inds=result.indicators||{};
-if(inds.rsi){const rc=inds.rsi.value<30?'rsi-green':inds.rsi.value>70?'rsi-red':'';indHtml+=`<div class="ind-card"><span class="ind-name">RSI</span><span class="ind-val ${rc}">${inds.rsi.value} - ${inds.rsi.signal}</span></div>`;}
-if(inds.macd){const mc=inds.macd.signal==='BUY'?'buy-c':'sell-c';indHtml+=`<div class="ind-card"><span class="ind-name">MACD</span><span class="ind-val ${mc}">${inds.macd.signal}</span></div>`;}
-if(inds.ema20){const ec=inds.ema20.signal==='BUY'?'buy-c':'sell-c';indHtml+=`<div class="ind-card"><span class="ind-name">EMA 20</span><span class="ind-val ${ec}">${inds.ema20.value} - ${inds.ema20.signal}</span></div>`;}
-if(inds.ema50){const ec=inds.ema50.signal==='BUY'?'buy-c':'sell-c';indHtml+=`<div class="ind-card"><span class="ind-name">EMA 50</span><span class="ind-val ${ec}">${inds.ema50.value} - ${inds.ema50.signal}</span></div>`;}
-if(inds.stoch){const sc=inds.stoch.signal==='BUY'?'buy-c':inds.stoch.signal==='SELL'?'sell-c':'neutral-c';indHtml+=`<div class="ind-card"><span class="ind-name">Stoch</span><span class="ind-val ${sc}">${inds.stoch.value} - ${inds.stoch.signal}</span></div>`;}
-if(inds.bbands){const bc=inds.bbands.signal==='BUY'?'buy-c':inds.bbands.signal==='SELL'?'sell-c':'neutral-c';indHtml+=`<div class="ind-card"><span class="ind-name">Bollinger</span><span class="ind-val ${bc}">${inds.bbands.signal}</span></div>`;}
-if(inds.liquidity){indHtml+=`<div class="ind-card"><span class="ind-name">Liquidity</span><span class="ind-val">${inds.liquidity.signal}</span></div>`;}
+
+// Basic Indicators
+let basicHtml='<p class="section-title">Basic Indicators</p>';
+if(inds.rsi){const rc=inds.rsi.value<30?'rsi-green':inds.rsi.value>70?'rsi-red':'';basicHtml+=`<div class="ind-card"><span class="ind-name">RSI</span><span class="ind-val ${rc}">${inds.rsi.value} - ${inds.rsi.signal}</span></div>`;}
+if(inds.macd){const mc=getSigColor(inds.macd.signal);basicHtml+=`<div class="ind-card"><span class="ind-name">MACD</span><span class="ind-val ${mc}">${inds.macd.signal}</span></div>`;}
+if(inds.ema20){basicHtml+=`<div class="ind-card"><span class="ind-name">EMA 20</span><span class="ind-val ${getSigColor(inds.ema20.signal)}">${inds.ema20.value} - ${inds.ema20.signal}</span></div>`;}
+if(inds.ema50){basicHtml+=`<div class="ind-card"><span class="ind-name">EMA 50</span><span class="ind-val ${getSigColor(inds.ema50.signal)}">${inds.ema50.value} - ${inds.ema50.signal}</span></div>`;}
+if(inds.stoch){basicHtml+=`<div class="ind-card"><span class="ind-name">Stochastic</span><span class="ind-val ${getSigColor(inds.stoch.signal)}">${inds.stoch.value} - ${inds.stoch.signal}</span></div>`;}
+if(inds.bbands){basicHtml+=`<div class="ind-card"><span class="ind-name">Bollinger</span><span class="ind-val ${getSigColor(inds.bbands.signal)}">${inds.bbands.signal}</span></div>`;}
+
+// Trend Indicators
+let trendHtml='<p class="section-title">Trend Indicators</p>';
+if(inds.supertrend){trendHtml+=`<div class="ind-card"><span class="ind-name">Supertrend</span><span class="ind-val ${getSigColor(inds.supertrend.signal)}">${inds.supertrend.signal}</span></div>`;}
+if(inds.psar){trendHtml+=`<div class="ind-card"><span class="ind-name">Parabolic SAR</span><span class="ind-val ${getSigColor(inds.psar.signal)}">${inds.psar.signal}</span></div>`;}
+
+// Volume Indicators
+let volHtml='<p class="section-title">Volume Indicators</p>';
+if(inds.obv){volHtml+=`<div class="ind-card"><span class="ind-name">OBV</span><span class="ind-val ${getSigColor(inds.obv.signal)}">${inds.obv.signal}</span></div>`;}
+if(inds.mfi){volHtml+=`<div class="ind-card"><span class="ind-name">MFI</span><span class="ind-val ${getSigColor(inds.mfi.signal)}">${inds.mfi.value} - ${inds.mfi.signal}</span></div>`;}
+if(inds.volume){volHtml+=`<div class="ind-card"><span class="ind-name">Volume</span><span class="ind-val">${inds.volume.signal}</span></div>`;}
+
+// Smart Money
+let smcHtml='<p class="section-title">Smart Money Concepts</p>';
+if(inds.smc){smcHtml+=`<div class="ind-card"><span class="ind-name">SMC</span><span class="ind-val ${getSigColor(inds.smc.signal)}">${inds.smc.signal}</span></div>`;}
+if(inds.order_blocks){smcHtml+=`<div class="ind-card"><span class="ind-name">Order Blocks</span><span class="ind-val ${getSigColor(inds.order_blocks.signal)}">${inds.order_blocks.signal}</span></div>`;}
+if(inds.fvg){smcHtml+=`<div class="ind-card"><span class="ind-name">Fair Value Gap</span><span class="ind-val ${getSigColor(inds.fvg.signal)}">${inds.fvg.signal}</span></div>`;}
+if(inds.liquidity){smcHtml+=`<div class="ind-card"><span class="ind-name">Liquidity</span><span class="ind-val ${getSigColor(inds.liquidity.signal)}">${inds.liquidity.signal}</span></div>`;}
+
+// Pivot Points
+let pivotHtml='';
+if(inds.pivots&&inds.pivots.pp){
+pivotHtml=`<p class="section-title">Pivot Points</p>
+<div class="pivot-grid">
+<div class="pivot-card"><label>R2</label><p style="color:#ef4444;">${inds.pivots.r2}</p></div>
+<div class="pivot-card"><label>R1</label><p style="color:#f97316;">${inds.pivots.r1}</p></div>
+<div class="pivot-card"><label>PP</label><p style="color:#fff;">${inds.pivots.pp}</p></div>
+<div class="pivot-card"><label>S1</label><p style="color:#22c55e;">${inds.pivots.s1}</p></div>
+<div class="pivot-card"><label>S2</label><p style="color:#00ff88;">${inds.pivots.s2}</p></div>
+</div>`;}
+
+// Fibonacci
+let fibHtml='';
+if(inds.fibonacci&&inds.fibonacci.f618){
+fibHtml=`<p class="section-title">Fibonacci Levels</p>
+<div class="fib-grid">
+<div class="fib-card"><label>23.6%</label><p>${inds.fibonacci.f236}</p></div>
+<div class="fib-card"><label>38.2%</label><p>${inds.fibonacci.f382}</p></div>
+<div class="fib-card"><label>50.0%</label><p>${inds.fibonacci.f500}</p></div>
+<div class="fib-card"><label>61.8%</label><p>${inds.fibonacci.f618}</p></div>
+<div class="fib-card"><label>78.6%</label><p>${inds.fibonacci.f786}</p></div>
+</div>`;}
+
+// News
 let newsHtml='';
-if(result.headlines&&result.headlines.length>0){newsHtml='<div style="margin-top:8px;"><p style="color:#888;font-size:11px;margin-bottom:5px;">Latest News:</p>';for(const h of result.headlines){newsHtml+=`<div class="news-item">- ${h}</div>`;}newsHtml+='</div>';}
+if(result.headlines&&result.headlines.length>0){newsHtml='<p class="section-title">Latest News</p>';for(const h of result.headlines){newsHtml+=`<div class="news-item">- ${h}</div>`;}}
+
 const timestamp=new Date().toLocaleTimeString();
 signalHistory.unshift({time:timestamp,pair:result.name,signal:result.final_signal,conf:result.confidence,result:'-'});
 if(signalHistory.length>20)signalHistory.pop();
 total++;
 updateWinRate();
 updateHistory();
-html+=`<div class="pair-result"><div class="pair-header"><h3>${result.name}</h3></div><div style="padding:15px;"><div class="signal-box ${getSignalClass(result.final_signal)}"><h2>${result.final_signal}</h2><p>Confidence: ${result.confidence}% | News: ${result.news}</p></div><p style="color:#888;font-size:12px;margin:8px 0;">Multi Timeframe Consensus:</p>${consensusHtml}<div class="info-grid"><div class="info-card"><label>Price</label><p>${result.price}</p></div><div class="info-card"><label>Stop Loss</label><p style="color:#ef4444;">${result.sl}</p></div><div class="info-card"><label>TP Level 1</label><p style="color:#00ff88;">${result.tp1}</p></div><div class="info-card"><label>TP Level 2</label><p style="color:#00ff88;">${result.tp2}</p></div><div class="info-card"><label>TP Level 3</label><p style="color:#00ff88;">${result.tp3}</p></div><div class="info-card"><label>ATR</label><p>${result.atr}</p></div></div><div class="sr-grid"><div class="sr-card"><label>Support</label><p style="color:#00ff88;">${result.support}</p></div><div class="sr-card"><label>Resistance</label><p style="color:#ef4444;">${result.resistance}</p></div></div><p style="color:#888;font-size:12px;margin:8px 0;">Indicators:</p>${indHtml}${newsHtml}</div></div>`;
+
+html+=`<div class="pair-result">
+<div class="pair-header"><h3>${result.name}</h3></div>
+<div style="padding:15px;">
+<div class="signal-box ${getSignalClass(result.final_signal)}">
+<h2>${result.final_signal}</h2>
+<p>Confidence: ${result.confidence}% | News: ${result.news}</p>
+</div>
+<p style="color:#888;font-size:12px;margin:8px 0;">Multi Timeframe Consensus:</p>
+${consensusHtml}
+<div class="info-grid">
+<div class="info-card"><label>Price</label><p>${result.price}</p></div>
+<div class="info-card"><label>Stop Loss</label><p style="color:#ef4444;">${result.sl}</p></div>
+<div class="info-card"><label>TP Level 1</label><p style="color:#00ff88;">${result.tp1}</p></div>
+<div class="info-card"><label>TP Level 2</label><p style="color:#00ff88;">${result.tp2}</p></div>
+<div class="info-card"><label>TP Level 3</label><p style="color:#00ff88;">${result.tp3}</p></div>
+<div class="info-card"><label>ATR</label><p>${result.atr}</p></div>
+</div>
+<div class="sr-grid">
+<div class="sr-card"><label>Support</label><p style="color:#00ff88;">${result.support}</p></div>
+<div class="sr-card"><label>Resistance</label><p style="color:#ef4444;">${result.resistance}</p></div>
+</div>
+${basicHtml}
+${trendHtml}
+${volHtml}
+${smcHtml}
+${pivotHtml}
+${fibHtml}
+${newsHtml}
+</div></div>`;
 }
 document.getElementById('results').innerHTML=html;
 }catch(e){document.getElementById('results').innerHTML='<p style="color:#ef4444;text-align:center;padding:20px;">Error: '+e.message+'</p>';}
