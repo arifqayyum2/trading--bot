@@ -62,32 +62,67 @@ def get_price(symbol):
         print(f"Price error {symbol}: {e}")
         return 0
 def get_candles_binance(symbol_binance, interval_binance, limit=50):
-    """Binance OHLCV candles"""
+    """Get OHLCV candles - multiple sources"""
+    interval_map = {
+        "5min": "5m", "15min": "15m", "30min": "30m",
+        "1h": "1h", "4h": "4h", "1day": "1d"
+    }
+    bi = interval_map.get(interval_binance, "1h")
+
+    # Try Binance US (different domain, not blocked on Render)
     try:
-        interval_map = {
-            "5min": "5m", "15min": "15m", "30min": "30m",
-            "1h": "1h", "4h": "4h", "1day": "1d"
-        }
-        bi = interval_map.get(interval_binance, interval_binance)
-        # Always use BTCUSDT for candles (reliable)
-        url = f"https://api.binance.com/api/v3/klines?symbol=BTCUSDT&interval={bi}&limit={limit}"
-        r = requests.get(url, timeout=15)
+        url = f"https://api.binance.us/api/v3/klines?symbol=BTCUSDT&interval={bi}&limit={limit}"
+        r = requests.get(url, timeout=10)
         raw = r.json()
-        if not isinstance(raw, list):
-            return []
-        candles = []
-        for c in raw:
-            candles.append({
-                "open":   str(c[1]),
-                "high":   str(c[2]),
-                "low":    str(c[3]),
-                "close":  str(c[4]),
-                "volume": str(c[5]),
-            })
-        return list(reversed(candles))  # newest first
-    except Exception as e:
-        print(f"Candle error: {e}")
-        return []
+        if isinstance(raw, list) and len(raw) > 5:
+            candles = []
+            for c in raw:
+                candles.append({
+                    "open": str(c[1]), "high": str(c[2]),
+                    "low": str(c[3]), "close": str(c[4]),
+                    "volume": str(c[5]),
+                })
+            return list(reversed(candles))
+    except:
+        pass
+
+    # Try Binance main
+    try:
+        url = f"https://api.binance.com/api/v3/klines?symbol=BTCUSDT&interval={bi}&limit={limit}"
+        r = requests.get(url, timeout=10)
+        raw = r.json()
+        if isinstance(raw, list) and len(raw) > 5:
+            candles = []
+            for c in raw:
+                candles.append({
+                    "open": str(c[1]), "high": str(c[2]),
+                    "low": str(c[3]), "close": str(c[4]),
+                    "volume": str(c[5]),
+                })
+            return list(reversed(candles))
+    except:
+        pass
+
+    # Try KuCoin (no geo restrictions)
+    try:
+        kucoin_map = {"5m":"5min","15m":"15min","30m":"30min","1h":"1hour","4h":"4hour","1d":"1day"}
+        ki = kucoin_map.get(bi, "1hour")
+        url = f"https://api.kucoin.com/api/v1/market/candles?type={ki}&symbol=BTC-USDT"
+        r = requests.get(url, timeout=10)
+        data = r.json().get("data", [])
+        if data and len(data) > 5:
+            candles = []
+            for c in data[:limit]:
+                candles.append({
+                    "open": str(c[1]), "close": str(c[2]),
+                    "high": str(c[3]), "low": str(c[4]),
+                    "volume": str(c[5]),
+                })
+            return candles  # KuCoin already newest first
+    except:
+        pass
+
+    return []
 def get_news_free(keyword):
     """
     GNews free API (no key needed for basic queries)
