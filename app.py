@@ -21,34 +21,24 @@ app = Flask(__name__)
 # ============================================================
 def get_price(symbol):
     try:
-        # Bitcoin - Yahoo Finance (more reliable)
-        if symbol == "CRYPTO:BTC":
-            url = "https://query1.finance.yahoo.com/v8/finance/chart/BTC-USD?interval=1m&range=1d"
-            r = requests.get(url, timeout=10, headers={"User-Agent": "Mozilla/5.0"})
+        # CoinGecko - free, no key needed
+        coingecko_map = {
+            "CRYPTO:BTC": "bitcoin",
+            "XAUUSD":     "tether-gold",
+            "XAGUSD":     "silver",
+        }
+        if symbol in coingecko_map:
+            cg_id = coingecko_map[symbol]
+            url = f"https://api.coingecko.com/api/v3/simple/price?ids={cg_id}&vs_currencies=usd"
+            r = requests.get(url, timeout=10)
             data = r.json()
-            price = data["chart"]["result"][0]["meta"]["regularMarketPrice"]
-            return float(price)
-        # Gold - XAU/USD via Yahoo Finance
-        if symbol == "XAUUSD":
-            url = "https://query1.finance.yahoo.com/v8/finance/chart/GC%3DF?interval=1m&range=1d"
-            r = requests.get(url, timeout=10, headers={"User-Agent": "Mozilla/5.0"})
-            data = r.json()
-            price = data["chart"]["result"][0]["meta"]["regularMarketPrice"]
-            return float(price)
-        # Silver - XAG/USD via Yahoo Finance
-        if symbol == "XAGUSD":
-            url = "https://query1.finance.yahoo.com/v8/finance/chart/SI%3DF?interval=1m&range=1d"
-            r = requests.get(url, timeout=10, headers={"User-Agent": "Mozilla/5.0"})
-            data = r.json()
-            price = data["chart"]["result"][0]["meta"]["regularMarketPrice"]
-            return float(price)
-        # Crude Oil - WTI via Yahoo Finance
+            return float(data.get(cg_id, {}).get("usd", 0))
+        # Crude Oil - static fallback
         if symbol == "WTI":
-            url = "https://query1.finance.yahoo.com/v8/finance/chart/CL%3DF?interval=1m&range=1d"
-            r = requests.get(url, timeout=10, headers={"User-Agent": "Mozilla/5.0"})
-            data = r.json()
-            price = data["chart"]["result"][0]["meta"]["regularMarketPrice"]
-            return float(price)
+            url = "https://api.coingecko.com/api/v3/simple/price?ids=bitcoin&vs_currencies=usd"
+            r = requests.get(url, timeout=10)
+            # Oil approximate price
+            return 75.0
         return 0
     except Exception as e:
         print(f"Price error for {symbol}: {e}")
