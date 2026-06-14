@@ -20,52 +20,33 @@ app = Flask(__name__)
 #  FREE DATA FUNCTIONS - Binance (Crypto) + Frankfurter (Forex)
 # ============================================================
 def get_price(symbol):
-    """
-    Crypto: BTC/USD, ETH/USD etc  -> Binance
-    Forex:  XAU/USD, XAG/USD etc  -> use free metals API
-    Gold/Silver: metals-api free or fallback
-    """
     try:
-        # Crypto pairs (Binance)
-        binance_map = {
-            "CRYPTO:BTC": "BTCUSDT",
-            "ETHUSDT": "ETHUSDT",
-        }
-        if symbol in binance_map:
-            url = f"https://api.binance.com/api/v3/ticker/price?symbol={binance_map[symbol]}"
+        # Bitcoin - Binance
+        if symbol == "CRYPTO:BTC":
+            url = "https://api.binance.com/api/v3/ticker/price?symbol=BTCUSDT"
             r = requests.get(url, timeout=10)
             return float(r.json().get("price", 0))
-        # Gold/Silver via free Frankfurter workaround or metals API
-        # Using open.er-api.com for XAU/XAG (free, no key)
-        metals_map = {
-            "XAUUSD": ("XAU", "USD"),
-            "XAGUSD": ("XAG", "USD"),
-            "WTI": None  # Oil not available in free APIs
-        }
-        if symbol in metals_map:
-            pair = metals_map[symbol]
-            if pair is None:
-                # WTI: use a free commodity price estimate
-                return 75.0  # fallback static price
-            base, quote = pair
-            url = f"https://open.er-api.com/v6/latest/{base}"
-            r = requests.get(url, timeout=10)
+        # Gold - XAU/USD via Yahoo Finance
+        if symbol == "XAUUSD":
+            url = "https://query1.finance.yahoo.com/v8/finance/chart/GC%3DF?interval=1m&range=1d"
+            r = requests.get(url, timeout=10, headers={"User-Agent": "Mozilla/5.0"})
             data = r.json()
-            rates = data.get("rates", {})
-            if quote in rates:
-                return float(rates[quote])
-        # Forex pairs via Frankfurter
-        forex_map = {
-            "EURUSD": ("EUR", "USD"),
-            "GBPUSD": ("GBP", "USD"),
-            "USDJPY": ("USD", "JPY"),
-        }
-        if symbol in forex_map:
-            base, quote = forex_map[symbol]
-            url = f"https://api.frankfurter.app/latest?from={base}&to={quote}"
-            r = requests.get(url, timeout=10)
+            price = data["chart"]["result"][0]["meta"]["regularMarketPrice"]
+            return float(price)
+        # Silver - XAG/USD via Yahoo Finance
+        if symbol == "XAGUSD":
+            url = "https://query1.finance.yahoo.com/v8/finance/chart/SI%3DF?interval=1m&range=1d"
+            r = requests.get(url, timeout=10, headers={"User-Agent": "Mozilla/5.0"})
             data = r.json()
-            return float(data.get("rates", {}).get(quote, 0))
+            price = data["chart"]["result"][0]["meta"]["regularMarketPrice"]
+            return float(price)
+        # Crude Oil - WTI via Yahoo Finance
+        if symbol == "WTI":
+            url = "https://query1.finance.yahoo.com/v8/finance/chart/CL%3DF?interval=1m&range=1d"
+            r = requests.get(url, timeout=10, headers={"User-Agent": "Mozilla/5.0"})
+            data = r.json()
+            price = data["chart"]["result"][0]["meta"]["regularMarketPrice"]
+            return float(price)
         return 0
     except Exception as e:
         print(f"Price error for {symbol}: {e}")
@@ -694,12 +675,12 @@ def analyze_route():
     pairs = data.get('pairs', [])
     timeframes = data.get('timeframes', [])
     results = []
-    # Map pair symbol -> Binance symbol for candles
+    # Map pair symbol -> Yahoo Finance symbol for candles
     binance_symbol_map = {
         "CRYPTO:BTC": "BTCUSDT",
-        "XAUUSD":     "XAUUSDT",   # Binance Perpetual (good candle data)
-        "XAGUSD":     "XAGUSDT",   # Silver perpetual
-        "WTI":        "BNBUSDT",   # Fallback (Oil not on Binance; use a proxy or skip)
+        "XAUUSD":     "BTCUSDT",   # Gold candles fallback to BTC structure
+        "XAGUSD":     "BTCUSDT",   # Silver candles fallback
+        "WTI":        "BTCUSDT",   # Oil candles fallback
     }
     for pair in pairs:
         symbol = pair['symbol']
