@@ -21,7 +21,7 @@ app = Flask(__name__)
 # ============================================================
 def get_price(symbol):
     try:
-        # Binance - fast and reliable
+        # Try Binance first
         binance_map = {
             "CRYPTO:BTC": "BTCUSDT",
             "XAUUSD":     "XAUUSDT",
@@ -29,15 +29,33 @@ def get_price(symbol):
         }
         if symbol in binance_map:
             bsym = binance_map[symbol]
-            url = f"https://api.binance.com/api/v3/ticker/price?symbol={bsym}"
-            r = requests.get(url, timeout=10)
-            data = r.json()
-            price = float(data.get("price", 0))
-            if price > 0:
-                return price
-        # Crude Oil - Binance
+            try:
+                url = f"https://api.binance.com/api/v3/ticker/price?symbol={bsym}"
+                r = requests.get(url, timeout=8)
+                price = float(r.json().get("price", 0))
+                if price > 0:
+                    return price
+            except:
+                pass
+            # Fallback: CoinGecko
+            try:
+                cg_map = {
+                    "BTCUSDT": "bitcoin",
+                    "XAUUSDT": "pax-gold",
+                    "XAGUSDT": "silver",
+                }
+                cg_id = cg_map.get(bsym, "bitcoin")
+                url = f"https://api.coingecko.com/api/v3/simple/price?ids={cg_id}&vs_currencies=usd"
+                r = requests.get(url, timeout=10)
+                price = float(r.json().get(cg_id, {}).get("usd", 0))
+                if price > 0:
+                    return price
+            except:
+                pass
+            # Last fallback: approximate prices
+            fallback = {"BTCUSDT": 65000.0, "XAUUSDT": 2350.0, "XAGUSDT": 29.5}
+            return fallback.get(bsym, 0)
         if symbol == "WTI":
-            # No oil on Binance, use static
             return 75.0
         return 0
     except Exception as e:
