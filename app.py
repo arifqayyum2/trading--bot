@@ -21,11 +21,13 @@ app = Flask(__name__)
 # ============================================================
 def get_price(symbol):
     try:
-        # Bitcoin - Binance
+        # Bitcoin - Yahoo Finance (more reliable)
         if symbol == "CRYPTO:BTC":
-            url = "https://api.binance.com/api/v3/ticker/price?symbol=BTCUSDT"
-            r = requests.get(url, timeout=10)
-            return float(r.json().get("price", 0))
+            url = "https://query1.finance.yahoo.com/v8/finance/chart/BTC-USD?interval=1m&range=1d"
+            r = requests.get(url, timeout=10, headers={"User-Agent": "Mozilla/5.0"})
+            data = r.json()
+            price = data["chart"]["result"][0]["meta"]["regularMarketPrice"]
+            return float(price)
         # Gold - XAU/USD via Yahoo Finance
         if symbol == "XAUUSD":
             url = "https://query1.finance.yahoo.com/v8/finance/chart/GC%3DF?interval=1m&range=1d"
