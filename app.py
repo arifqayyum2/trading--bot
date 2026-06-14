@@ -21,27 +21,27 @@ app = Flask(__name__)
 # ============================================================
 def get_price(symbol):
     try:
-        # CoinGecko - free, no key needed
-        coingecko_map = {
-            "CRYPTO:BTC": "bitcoin",
-            "XAUUSD":     "tether-gold",
-            "XAGUSD":     "silver",
+        # Binance - fast and reliable
+        binance_map = {
+            "CRYPTO:BTC": "BTCUSDT",
+            "XAUUSD":     "XAUUSDT",
+            "XAGUSD":     "XAGUSDT",
         }
-        if symbol in coingecko_map:
-            cg_id = coingecko_map[symbol]
-            url = f"https://api.coingecko.com/api/v3/simple/price?ids={cg_id}&vs_currencies=usd"
+        if symbol in binance_map:
+            bsym = binance_map[symbol]
+            url = f"https://api.binance.com/api/v3/ticker/price?symbol={bsym}"
             r = requests.get(url, timeout=10)
             data = r.json()
-            return float(data.get(cg_id, {}).get("usd", 0))
-        # Crude Oil - static fallback
+            price = float(data.get("price", 0))
+            if price > 0:
+                return price
+        # Crude Oil - Binance
         if symbol == "WTI":
-            url = "https://api.coingecko.com/api/v3/simple/price?ids=bitcoin&vs_currencies=usd"
-            r = requests.get(url, timeout=10)
-            # Oil approximate price
+            # No oil on Binance, use static
             return 75.0
         return 0
     except Exception as e:
-        print(f"Price error for {symbol}: {e}")
+        print(f"Price error {symbol}: {e}")
         return 0
 def get_candles_binance(symbol_binance, interval_binance, limit=50):
     """Binance OHLCV candles"""
