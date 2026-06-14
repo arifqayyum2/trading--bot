@@ -4,8 +4,8 @@ from textblob import TextBlob
 import time
 import os
 import threading
-from telegram import Bot
-from telegram.ext import Updater, CommandHandler, MessageHandler, Filters
+import requests as req
+
 
 # ============================================================
 #  TELEGRAM CONFIG — apni values yahan daalo
@@ -13,11 +13,12 @@ from telegram.ext import Updater, CommandHandler, MessageHandler, Filters
 TELEGRAM_TOKEN = "8964601911:AAHGORYWnBBmtwB2OD_advSRhmlKAcYw-Q4"
 CHAT_ID        = "8791089686"
 
-bot = Bot(token=TELEGRAM_TOKEN)
+
 
 def send_telegram(message):
     try:
-        bot.send_message(chat_id=CHAT_ID, text=message, parse_mode="HTML")
+      url = f"https://api.telegram.org/bot{TELEGRAM_TOKEN}/sendMessage"
+req.post(url, json={"chat_id": CHAT_ID, "text": message, "parse_mode": "HTML"})
     except Exception as e:
         print(f"Telegram Error: {e}")
 
