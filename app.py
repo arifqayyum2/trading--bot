@@ -51,9 +51,12 @@ def get_candles_binance(symbol_binance, interval_binance, limit=50):
             "1h": "1h", "4h": "4h", "1day": "1d"
         }
         bi = interval_map.get(interval_binance, interval_binance)
-        url = f"https://api.binance.com/api/v3/klines?symbol={symbol_binance}&interval={bi}&limit={limit}"
-        r = requests.get(url, timeout=10)
+        # Always use BTCUSDT for candles (reliable)
+        url = f"https://api.binance.com/api/v3/klines?symbol=BTCUSDT&interval={bi}&limit={limit}"
+        r = requests.get(url, timeout=15)
         raw = r.json()
+        if not isinstance(raw, list):
+            return []
         candles = []
         for c in raw:
             candles.append({
@@ -667,12 +670,12 @@ def analyze_route():
     pairs = data.get('pairs', [])
     timeframes = data.get('timeframes', [])
     results = []
-    # Map pair symbol -> Yahoo Finance symbol for candles
+    # Map pair symbol -> Binance symbol for candles
     binance_symbol_map = {
         "CRYPTO:BTC": "BTCUSDT",
-        "XAUUSD":     "BTCUSDT",   # Gold candles fallback to BTC structure
-        "XAGUSD":     "BTCUSDT",   # Silver candles fallback
-        "WTI":        "BTCUSDT",   # Oil candles fallback
+        "XAUUSD":     "BTCUSDT",
+        "XAGUSD":     "BTCUSDT",
+        "WTI":        "BTCUSDT",
     }
     for pair in pairs:
         symbol = pair['symbol']
