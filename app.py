@@ -4,30 +4,21 @@ from textblob import TextBlob
 import time
 import os
 import threading
-import requests as req
-
-
 # ============================================================
 #  TELEGRAM CONFIG — apni values yahan daalo
 # ============================================================
 TELEGRAM_TOKEN = "8964601911:AAHGORYWnBBmtwB2OD_advSRhmlKAcYw-Q4"
 CHAT_ID        = "8791089686"
-
-
-
 def send_telegram(message):
     try:
-      url = f"https://api.telegram.org/bot{TELEGRAM_TOKEN}/sendMessage"
-req.post(url, json={"chat_id": CHAT_ID, "text": message, "parse_mode": "HTML"})
+        url = f"https://api.telegram.org/bot{TELEGRAM_TOKEN}/sendMessage"
+        requests.post(url, json={"chat_id": CHAT_ID, "text": message, "parse_mode": "HTML"})
     except Exception as e:
         print(f"Telegram Error: {e}")
-
 app = Flask(__name__)
-
 # ============================================================
 #  FREE DATA FUNCTIONS - Binance (Crypto) + Frankfurter (Forex)
 # ============================================================
-
 def get_price(symbol):
     """
     Crypto: BTC/USD, ETH/USD etc  -> Binance
@@ -44,7 +35,6 @@ def get_price(symbol):
             url = f"https://api.binance.com/api/v3/ticker/price?symbol={binance_map[symbol]}"
             r = requests.get(url, timeout=10)
             return float(r.json().get("price", 0))
-
         # Gold/Silver via free Frankfurter workaround or metals API
         # Using open.er-api.com for XAU/XAG (free, no key)
         metals_map = {
@@ -57,7 +47,6 @@ def get_price(symbol):
             if pair is None:
                 # WTI: use a free commodity price estimate
                 return 75.0  # fallback static price
-
             base, quote = pair
             url = f"https://open.er-api.com/v6/latest/{base}"
             r = requests.get(url, timeout=10)
@@ -65,7 +54,6 @@ def get_price(symbol):
             rates = data.get("rates", {})
             if quote in rates:
                 return float(rates[quote])
-
         # Forex pairs via Frankfurter
         forex_map = {
             "EURUSD": ("EUR", "USD"),
@@ -78,13 +66,10 @@ def get_price(symbol):
             r = requests.get(url, timeout=10)
             data = r.json()
             return float(data.get("rates", {}).get(quote, 0))
-
         return 0
     except Exception as e:
         print(f"Price error for {symbol}: {e}")
         return 0
-
-
 def get_candles_binance(symbol_binance, interval_binance, limit=50):
     """Binance OHLCV candles"""
     try:
@@ -109,8 +94,6 @@ def get_candles_binance(symbol_binance, interval_binance, limit=50):
     except Exception as e:
         print(f"Candle error: {e}")
         return []
-
-
 def get_news_free(keyword):
     """
     GNews free API (no key needed for basic queries)
@@ -134,12 +117,9 @@ def get_news_free(keyword):
         return headlines, mood
     except:
         return [], "Neutral"
-
-
 # ============================================================
 #  INDICATOR CALCULATIONS (same logic, no API key needed)
 # ============================================================
-
 def calc_rsi(candles, period=14):
     try:
         if len(candles) < period + 1:
@@ -160,21 +140,17 @@ def calc_rsi(candles, period=14):
         return round(100 - (100 / (1 + rs)), 1)
     except:
         return None
-
-
 def calc_macd(candles):
     try:
         if len(candles) < 26:
             return None, None
         closes = [float(c["close"]) for c in reversed(candles)]
-
         def ema(data, n):
             k = 2 / (n + 1)
             result = [data[0]]
             for v in data[1:]:
                 result.append(v * k + result[-1] * (1 - k))
             return result
-
         ema12 = ema(closes, 12)
         ema26 = ema(closes, 26)
         macd_line = [e12 - e26 for e12, e26 in zip(ema12, ema26)]
@@ -182,8 +158,6 @@ def calc_macd(candles):
         return macd_line[-1], signal_line[-1]
     except:
         return None, None
-
-
 def calc_ema(candles, period):
     try:
         if len(candles) < period:
@@ -196,8 +170,6 @@ def calc_ema(candles, period):
         return round(ema_val, 4)
     except:
         return None
-
-
 def calc_stochastic(candles, period=14):
     try:
         if len(candles) < period:
@@ -213,8 +185,6 @@ def calc_stochastic(candles, period=14):
         return round(k, 1)
     except:
         return None
-
-
 def calc_bbands(candles, period=20):
     try:
         if len(candles) < period:
@@ -225,8 +195,6 @@ def calc_bbands(candles, period=20):
         return round(mean + 2 * std, 4), round(mean - 2 * std, 4)
     except:
         return None, None
-
-
 def calc_atr(candles, period=14):
     try:
         if len(candles) < period + 1:
@@ -240,8 +208,6 @@ def calc_atr(candles, period=14):
         return round(sum(trs) / period, 4)
     except:
         return 0
-
-
 def calc_supertrend(candles, period=7, multiplier=3):
     try:
         if len(candles) < period + 1:
@@ -258,8 +224,6 @@ def calc_supertrend(candles, period=7, multiplier=3):
         return "BUY" if closes[0] > lower else "SELL"
     except:
         return "N/A"
-
-
 def calc_parabolic_sar(candles):
     try:
         if len(candles) < 5:
@@ -276,8 +240,6 @@ def calc_parabolic_sar(candles):
         return "NEUTRAL"
     except:
         return "N/A"
-
-
 def calc_pivot_points(candles):
     try:
         if len(candles) < 2:
@@ -287,8 +249,6 @@ def calc_pivot_points(candles):
         return {"pp": pp, "r1": round(2*pp-l,4), "r2": round(pp+(h-l),4), "s1": round(2*pp-h,4), "s2": round(pp-(h-l),4)}
     except:
         return {}
-
-
 def calc_fibonacci(candles):
     try:
         if len(candles) < 20:
@@ -301,8 +261,6 @@ def calc_fibonacci(candles):
                 "f786": round(high-0.786*diff,4)}
     except:
         return {}
-
-
 def calc_order_blocks(candles, price):
     try:
         if len(candles) < 5:
@@ -322,8 +280,6 @@ def calc_order_blocks(candles, price):
         return "NO OB", round(bull_ob,4), round(bear_ob,4)
     except:
         return "N/A", 0, 0
-
-
 def calc_fair_value_gap(candles):
     try:
         if len(candles) < 3:
@@ -338,8 +294,6 @@ def calc_fair_value_gap(candles):
         return "NO FVG", 0, 0
     except:
         return "N/A", 0, 0
-
-
 def calc_smart_money(candles, price):
     try:
         if len(candles) < 10:
@@ -355,8 +309,6 @@ def calc_smart_money(candles, price):
         return "NEUTRAL"
     except:
         return "N/A"
-
-
 def calc_obv(candles):
     try:
         if len(candles) < 5:
@@ -374,8 +326,6 @@ def calc_obv(candles):
         return "NEUTRAL"
     except:
         return "N/A"
-
-
 def calc_mfi(candles, period=14):
     try:
         if len(candles) < period+1:
@@ -391,8 +341,6 @@ def calc_mfi(candles, period=14):
         return round(100-(100/(1+pos/neg)),1)
     except:
         return 50
-
-
 def calc_volume_spike(candles):
     try:
         if len(candles) < 10:
@@ -407,21 +355,16 @@ def calc_volume_spike(candles):
         return f"NORMAL ({ratio:.1f}x)"
     except:
         return "N/A"
-
-
 # ============================================================
 #  TIMEFRAME SCORE (all indicators from candles — no API key)
 # ============================================================
-
 def get_tf_score(symbol_binance, interval, price):
     candles = get_candles_binance(symbol_binance, interval, 60)
     if not candles:
         return 0, 0, 50, {}
-
     weighted_score = 0
     max_score = 0
     indicators = {}
-
     # RSI
     rsi = calc_rsi(candles)
     if rsi is not None:
@@ -432,7 +375,6 @@ def get_tf_score(symbol_binance, interval, price):
         elif rsi > 55: weighted_score -= 8;  rs = "SELL"
         else:          rs = "NEUTRAL"
         indicators["rsi"] = {"value": rsi, "signal": rs}
-
     # MACD
     macd_val, macd_sig = calc_macd(candles)
     if macd_val is not None:
@@ -441,7 +383,6 @@ def get_tf_score(symbol_binance, interval, price):
         if diff > 0: weighted_score += 12; ms = "BUY"
         else:        weighted_score -= 12; ms = "SELL"
         indicators["macd"] = {"signal": ms}
-
     # EMA 20
     ema20 = calc_ema(candles, 20)
     if ema20:
@@ -449,7 +390,6 @@ def get_tf_score(symbol_binance, interval, price):
         if price > ema20: weighted_score += 8; e20s = "BUY"
         else:             weighted_score -= 8; e20s = "SELL"
         indicators["ema20"] = {"value": round(ema20, 4), "signal": e20s}
-
     # EMA 50
     ema50 = calc_ema(candles, 50)
     if ema50:
@@ -457,7 +397,6 @@ def get_tf_score(symbol_binance, interval, price):
         if price > ema50: weighted_score += 8; e50s = "BUY"
         else:             weighted_score -= 8; e50s = "SELL"
         indicators["ema50"] = {"value": round(ema50, 4), "signal": e50s}
-
     # Stochastic
     stoch_k = calc_stochastic(candles)
     if stoch_k is not None:
@@ -466,7 +405,6 @@ def get_tf_score(symbol_binance, interval, price):
         elif stoch_k > 80: weighted_score -= 10; ss = "SELL"
         else:              ss = "NEUTRAL"
         indicators["stoch"] = {"value": stoch_k, "signal": ss}
-
     # Bollinger Bands
     bb_upper, bb_lower = calc_bbands(candles)
     if bb_upper and bb_lower:
@@ -475,57 +413,48 @@ def get_tf_score(symbol_binance, interval, price):
         elif price > bb_upper: weighted_score -= 8; bbs = "SELL"
         else:                  bbs = "NEUTRAL"
         indicators["bbands"] = {"signal": bbs}
-
     # Supertrend
     st = calc_supertrend(candles)
     max_score += 10
     if st == "BUY":  weighted_score += 10
     elif st == "SELL": weighted_score -= 10
     indicators["supertrend"] = {"signal": st}
-
     # Parabolic SAR
     psar = calc_parabolic_sar(candles)
     max_score += 8
     if psar == "BUY":  weighted_score += 8
     elif psar == "SELL": weighted_score -= 8
     indicators["psar"] = {"signal": psar}
-
     # Pivot Points
     pivots = calc_pivot_points(candles)
     indicators["pivots"] = pivots
-
     # Fibonacci
     fib = calc_fibonacci(candles)
     indicators["fibonacci"] = fib
-
     # Order Blocks
     ob_sig, bull_ob, bear_ob = calc_order_blocks(candles, price)
     max_score += 8
     if "BULLISH" in ob_sig: weighted_score += 8
     elif "BEARISH" in ob_sig: weighted_score -= 8
     indicators["order_blocks"] = {"signal": ob_sig, "bull": bull_ob, "bear": bear_ob}
-
     # FVG
     fvg_sig, fvg_l, fvg_h = calc_fair_value_gap(candles)
     max_score += 6
     if "BULLISH" in fvg_sig: weighted_score += 6
     elif "BEARISH" in fvg_sig: weighted_score -= 6
     indicators["fvg"] = {"signal": fvg_sig, "low": fvg_l, "high": fvg_h}
-
     # SMC
     smc = calc_smart_money(candles, price)
     max_score += 8
     if "BULLISH" in smc: weighted_score += 8
     elif "BEARISH" in smc: weighted_score -= 8
     indicators["smc"] = {"signal": smc}
-
     # OBV
     obv = calc_obv(candles)
     max_score += 6
     if obv == "BUY":  weighted_score += 6
     elif obv == "SELL": weighted_score -= 6
     indicators["obv"] = {"signal": obv}
-
     # MFI
     mfi = calc_mfi(candles)
     max_score += 6
@@ -533,15 +462,12 @@ def get_tf_score(symbol_binance, interval, price):
     elif mfi > 80: weighted_score -= 6; mfis = "SELL"
     else:          mfis = "NEUTRAL"
     indicators["mfi"] = {"value": mfi, "signal": mfis}
-
     # Volume Spike
     vs = calc_volume_spike(candles)
     indicators["volume"] = {"signal": vs}
-
     # Support / Resistance
     indicators["support"]    = round(min(float(c["low"])  for c in candles[:30]), 4)
     indicators["resistance"] = round(max(float(c["high"]) for c in candles[:30]), 4)
-
     # Liquidity Sweep
     max_score += 7
     all_highs = [float(c["high"]) for c in candles[1:]]
@@ -553,16 +479,12 @@ def get_tf_score(symbol_binance, interval, price):
     else:
         liq = "NO SWEEP"
     indicators["liquidity"] = {"signal": liq}
-
     confidence = round(((weighted_score + max_score) / (2 * max_score)) * 100) if max_score > 0 else 50
     confidence = max(0, min(confidence, 100))
     return weighted_score, max_score, confidence, indicators
-
-
 # ============================================================
 #  HTML UI (same design, updated pairs for free APIs)
 # ============================================================
-
 HTML = """<!DOCTYPE html>
 <html>
 <head>
@@ -681,7 +603,6 @@ body{background:#0d1117;color:#fff;font-family:Arial}
 </div>
 <script>
 let selectedPairs=[],selectedTFs=[],signalHistory=[],wins=0,total=0;
-
 function togglePair(btn,symbol,name,news){
   const i=selectedPairs.findIndex(p=>p.symbol===symbol);
   if(i>=0){selectedPairs.splice(i,1);btn.classList.remove('active');}
@@ -761,24 +682,18 @@ function updateHistory(){const b=document.getElementById('historyBody');if(!sign
 </script>
 </body>
 </html>"""
-
-
 # ============================================================
 #  FLASK ROUTES
 # ============================================================
-
 @app.route('/')
 def index():
     return render_template_string(HTML)
-
-
 @app.route('/analyze', methods=['POST'])
 def analyze_route():
     data = request.json
     pairs = data.get('pairs', [])
     timeframes = data.get('timeframes', [])
     results = []
-
     # Map pair symbol -> Binance symbol for candles
     binance_symbol_map = {
         "CRYPTO:BTC": "BTCUSDT",
@@ -786,31 +701,24 @@ def analyze_route():
         "XAGUSD":     "XAGUSDT",   # Silver perpetual
         "WTI":        "BNBUSDT",   # Fallback (Oil not on Binance; use a proxy or skip)
     }
-
     for pair in pairs:
         symbol = pair['symbol']
         name   = pair['name']
         news_kw = pair['news']
-
         price = get_price(symbol)
         if price == 0:
             results.append({'name': name, 'error': True})
             continue
-
         headlines, news_dir = get_news_free(news_kw)
-
         binance_sym = binance_symbol_map.get(symbol, "BTCUSDT")
-
         # ATR from 1h candles
         candles_1h = get_candles_binance(binance_sym, "1h", 20)
         atr = calc_atr(candles_1h) if candles_1h else 0
-
         tf_results   = []
         total_score  = 0
         total_weight = 0
         total_conf   = 0
         all_indicators = {}
-
         for i, tf_data in enumerate(timeframes):
             tf    = tf_data['tf']
             label = tf_data['label']
@@ -823,12 +731,9 @@ def analyze_route():
             total_conf   += c * weight
             if not all_indicators:
                 all_indicators = indicators
-
         if "Positive" in news_dir:  total_score += 2
         elif "Negative" in news_dir: total_score -= 2
-
         confidence = round(total_conf / total_weight) if total_weight else 50
-
         if total_score > 2:
             final_signal = "STRONG BUY" if confidence >= 75 else "BUY"
             sl  = round(price - atr*1.5, 4) if atr else round(price*0.98, 4)
@@ -847,7 +752,6 @@ def analyze_route():
             tp1 = round(price*1.01, 4)
             tp2 = round(price*1.02, 4)
             tp3 = round(price*1.03, 4)
-
         result_data = {
             'name':        name,
             'price':       round(price, 4),
@@ -863,7 +767,6 @@ def analyze_route():
             'headlines':    headlines,
         }
         results.append(result_data)
-
         # Telegram pe signal bhejo
         emoji = "🟢" if "BUY" in final_signal else "🔴" if "SELL" in final_signal else "⚪"
         tf_line = " | ".join([f"{t['label']}: {t['signal']}({t['confidence']}%)" for t in tf_results])
@@ -878,10 +781,7 @@ def analyze_route():
             f"⏱ TF: {tf_line}"
         )
         threading.Thread(target=send_telegram, args=(tg_msg,), daemon=True).start()
-
     return jsonify({'results': results})
-
-
 if __name__ == '__main__':
     port = int(os.environ.get('PORT', 5000))
     app.run(debug=False, host='0.0.0.0', port=port)
