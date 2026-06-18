@@ -20,41 +20,46 @@ app = Flask(__name__)
 #  FREE DATA FUNCTIONS - Binance (Crypto) + Frankfurter (Forex)
 # ============================================================
 def get_price(symbol):
+    """Get price - tries multiple free APIs"""
     try:
         binance_map = {
             "CRYPTO:BTC": "BTCUSDT",
-            "XAUUSD":     "XAUUSDT",
+            "XAUUSD":     "XAUUSDT", 
             "XAGUSD":     "XAGUSDT",
         }
         if symbol in binance_map:
             bsym = binance_map[symbol]
-            # Try Binance
-            try:
-                url = f"https://api.binance.com/api/v3/ticker/price?symbol={bsym}"
-                r = requests.get(url, timeout=8)
-                price = float(r.json().get("price", 0))
-                if price > 0:
-                    return price
-            except:
-                pass
-            # Try CoinGecko
+            
+            # Source 1: Binance
+            for base_url in ["https://api.binance.com", "https://api1.binance.com", "https://api2.binance.com"]:
+                try:
+                    url = f"{base_url}/api/v3/ticker/price?symbol={bsym}"
+                    r = requests.get(url, timeout=6)
+                    price = float(r.json().get("price", 0))
+                    if price > 0:
+                        return price
+                except:
+                    continue
+
+            # Source 2: CoinGecko
             try:
                 cg_map = {"BTCUSDT": "bitcoin", "XAUUSDT": "pax-gold", "XAGUSDT": "silver"}
                 cg_id = cg_map.get(bsym, "bitcoin")
                 url = f"https://api.coingecko.com/api/v3/simple/price?ids={cg_id}&vs_currencies=usd"
-                r = requests.get(url, timeout=10)
+                r = requests.get(url, timeout=8, headers={"User-Agent": "Mozilla/5.0"})
                 price = float(r.json().get(cg_id, {}).get("usd", 0))
                 if price > 0:
                     return price
             except:
                 pass
-            # Try Kraken
+
+            # Source 3: Kraken
             try:
                 kraken_map = {"BTCUSDT": "XBTUSD", "XAUUSDT": "XAUUSD", "XAGUSDT": "XAGUSD"}
                 ks = kraken_map.get(bsym)
                 if ks:
                     url = f"https://api.kraken.com/0/public/Ticker?pair={ks}"
-                    r = requests.get(url, timeout=8)
+                    r = requests.get(url, timeout=8, headers={"User-Agent": "Mozilla/5.0"})
                     result = r.json().get("result", {})
                     if result:
                         price = float(list(result.values())[0]["c"][0])
@@ -62,14 +67,39 @@ def get_price(symbol):
                             return price
             except:
                 pass
-            return 0
-        if symbol == "WTI":
+
+            # Source 4: OKX
             try:
-                url = "https://api.kraken.com/0/public/Ticker?pair=USDCAD"
-                # Oil not on Kraken, use static
-                return 75.0
+                okx_map = {"BTCUSDT": "BTC-USDT", "XAUUSDT": "XAU-USDT", "XAGUSDT": "XAG-USDT"}
+                ok_sym = okx_map.get(bsym)
+                if ok_sym:
+                    url = f"https://www.okx.com/api/v5/market/ticker?instId={ok_sym}"
+                    r = requests.get(url, timeout=8, headers={"User-Agent": "Mozilla/5.0"})
+                    data = r.json().get("data", [])
+                    if data:
+                        price = float(data[0].get("last", 0))
+                        if price > 0:
+                            return price
             except:
-                return 75.0
+                pass
+
+            # Source 5: Gate.io
+            try:
+                gate_map = {"BTCUSDT": "BTC_USDT", "XAUUSDT": "XAU_USDT", "XAGUSDT": "XAG_USDT"}
+                gs = gate_map.get(bsym)
+                if gs:
+                    url = f"https://api.gateio.ws/api/v4/spot/tickers?currency_pair={gs}"
+                    r = requests.get(url, timeout=8, headers={"User-Agent": "Mozilla/5.0"})
+                    data = r.json()
+                    if data and isinstance(data, list):
+                        price = float(data[0].get("last", 0))
+                        if price > 0:
+                            return price
+            except:
+                pass
+
+        if symbol == "WTI":
+            return 75.0
         return 0
     except Exception as e:
         print(f"Price error {symbol}: {e}")
