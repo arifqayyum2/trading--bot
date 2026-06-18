@@ -53,11 +53,16 @@ def get_price(symbol):
                     return price
             except:
                 pass
-            # Metals-API fallback for Gold/Silver
+            # Frankfurter for Gold/Silver real price
             try:
-                metals = {"XAUUSDT": 2350.0, "XAGUSDT": 29.5}
-                if bsym in metals:
-                    return metals[bsym]
+                metals_fx = {"XAUUSDT": "XAU", "XAGUSDT": "XAG"}
+                if bsym in metals_fx:
+                    fx_sym = metals_fx[bsym]
+                    url = f"https://api.frankfurter.app/latest?from={fx_sym}&to=USD"
+                    r = requests.get(url, timeout=8)
+                    rate = r.json().get("rates", {}).get("USD", 0)
+                    if rate > 0:
+                        return float(rate)
             except:
                 pass
             return 0
@@ -77,7 +82,7 @@ def get_candles_binance(symbol_binance, interval_binance, limit=60):
 
     # Source 1: Binance
     try:
-        url = f"https://api.binance.com/api/v3/klines?symbol=BTCUSDT&interval={bi}&limit={limit}"
+        url = f"https://api.binance.com/api/v3/klines?symbol={symbol_binance}&interval={bi}&limit={limit}"
         r = requests.get(url, timeout=8)
         raw = r.json()
         if isinstance(raw, list) and len(raw) > 10:
@@ -96,7 +101,8 @@ def get_candles_binance(symbol_binance, interval_binance, limit=60):
     try:
         kucoin_map = {"5m":"5min","15m":"15min","30m":"30min","1h":"1hour","4h":"4hour","1d":"1day"}
         ki = kucoin_map.get(bi, "1hour")
-        url = f"https://api.kucoin.com/api/v1/market/candles?type={ki}&symbol=BTC-USDT"
+        kc_sym = "BTC-USDT" if "BTC" in symbol_binance else ("XAU-USDT" if "XAU" in symbol_binance else ("XAG-USDT" if "XAG" in symbol_binance else "BTC-USDT"))
+        url = f"https://api.kucoin.com/api/v1/market/candles?type={ki}&symbol={kc_sym}"
         r = requests.get(url, timeout=8)
         data = r.json().get("data", [])
         if data and len(data) > 10:
@@ -756,11 +762,11 @@ def analyze_route():
     pairs = data.get('pairs', [])
     timeframes = data.get('timeframes', [])
     results = []
-    # Map pair symbol -> Binance symbol for candles
+    # Map pair symbol -> candle symbol
     binance_symbol_map = {
         "CRYPTO:BTC": "BTCUSDT",
-        "XAUUSD":     "BTCUSDT",
-        "XAGUSD":     "BTCUSDT",
+        "XAUUSD":     "XAUUSDT",
+        "XAGUSD":     "XAGUSDT",
         "WTI":        "BTCUSDT",
     }
     for pair in pairs:
