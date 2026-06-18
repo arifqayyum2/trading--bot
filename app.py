@@ -53,20 +53,32 @@ def get_price(symbol):
                     return price
             except:
                 pass
-            # Frankfurter for Gold/Silver real price
+            # Frankfurter for Gold/Silver
             try:
                 metals_fx = {"XAUUSDT": "XAU", "XAGUSDT": "XAG"}
                 if bsym in metals_fx:
                     fx_sym = metals_fx[bsym]
-                    url = f"https://api.frankfurter.app/latest?from={fx_sym}&to=USD"
+                    url = f"https://api.frankfurter.app/latest?from=USD&to={fx_sym}"
                     r = requests.get(url, timeout=8)
-                    rate = r.json().get("rates", {}).get("USD", 0)
+                    rate = r.json().get("rates", {}).get(fx_sym, 0)
                     if rate > 0:
-                        return float(rate)
+                        # rate = how many XAU per USD, invert for USD per XAU
+                        return round(1.0 / float(rate), 4)
             except:
                 pass
-            return 0
+            # Static fallback
+            static = {"XAUUSDT": 2350.0, "XAGUSDT": 29.5}
+            return static.get(bsym, 0)
         if symbol == "WTI":
+            try:
+                # OKX crude oil
+                url = "https://www.okx.com/api/v5/market/ticker?instId=WTI-USD-SWAP"
+                r = requests.get(url, timeout=8)
+                data = r.json().get("data", [])
+                if data:
+                    return float(data[0].get("last", 0))
+            except:
+                pass
             return 75.0
         return 0
     except Exception as e:
