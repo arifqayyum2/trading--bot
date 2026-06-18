@@ -53,7 +53,7 @@ def get_price(symbol):
                     return price
             except:
                 pass
-            # Frankfurter for Gold/Silver
+            # Frankfurter for Gold/Silver (per troy ounce)
             try:
                 metals_fx = {"XAUUSDT": "XAU", "XAGUSDT": "XAG"}
                 if bsym in metals_fx:
@@ -62,11 +62,12 @@ def get_price(symbol):
                     r = requests.get(url, timeout=8)
                     rate = r.json().get("rates", {}).get(fx_sym, 0)
                     if rate > 0:
-                        # rate = how many XAU per USD, invert for USD per XAU
-                        return round(1.0 / float(rate), 4)
+                        price_per_gram = round(1.0 / float(rate), 4)
+                        # Convert to troy ounce (1 troy oz = 31.1035 grams)
+                        return round(price_per_gram * 31.1035, 4)
             except:
                 pass
-            # Static fallback
+            # Static fallback (per troy ounce)
             static = {"XAUUSDT": 2350.0, "XAGUSDT": 29.5}
             return static.get(bsym, 0)
         if symbol == "WTI":
