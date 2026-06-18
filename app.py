@@ -814,7 +814,12 @@ def analyze_route():
         binance_sym = binance_symbol_map.get(symbol, "BTCUSDT")
         # ATR from 1h candles
         candles_1h = get_candles_binance(binance_sym, "1h", 20)
-        atr = calc_atr(candles_1h) if candles_1h else 0
+        raw_atr = calc_atr(candles_1h) if candles_1h else 0
+        # If ATR is too large relative to price, use price-based ATR
+        if price > 0 and raw_atr > price * 0.5:
+            atr = round(price * 0.005, 4)  # 0.5% of price
+        else:
+            atr = raw_atr
         tf_results   = []
         total_score  = 0
         total_weight = 0
