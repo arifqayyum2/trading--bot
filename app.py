@@ -148,28 +148,49 @@ def get_candles_binance(symbol_binance, interval_binance, limit=60):
     except:
         pass
 
-    # Source 4: Generate synthetic candles from price (always works!)
+    # Source 4: Generate synthetic candles scaled to actual symbol price
+    base_prices = {
+        "BTCUSDT": 65000.0,
+        "XAUUSDT": 2350.0,
+        "XAGUSDT": 29.5,
+        "BTCUSD":  65000.0,
+    }
+    base_price = base_prices.get(symbol_binance, 65000.0)
+
+    # Try to get real price first
     try:
-        price_url = "https://api.coingecko.com/api/v3/simple/price?ids=bitcoin&vs_currencies=usd"
-        r = requests.get(price_url, timeout=8)
-        base_price = float(r.json().get("bitcoin", {}).get("usd", 65000))
+        if "BTC" in symbol_binance:
+            url = "https://api.coingecko.com/api/v3/simple/price?ids=bitcoin&vs_currencies=usd"
+            r = requests.get(url, timeout=6)
+            base_price = float(r.json().get("bitcoin", {}).get("usd", base_price))
+        elif "XAU" in symbol_binance:
+            url = "https://api.frankfurter.app/latest?from=USD&to=XAU"
+            r = requests.get(url, timeout=6)
+            rate = r.json().get("rates", {}).get("XAU", 0)
+            if rate > 0: base_price = round(1.0/rate, 2)
+        elif "XAG" in symbol_binance:
+            url = "https://api.frankfurter.app/latest?from=USD&to=XAG"
+            r = requests.get(url, timeout=6)
+            rate = r.json().get("rates", {}).get("XAG", 0)
+            if rate > 0: base_price = round(1.0/rate, 2)
     except:
-        base_price = 65000.0
+        pass
 
     import random
-    random.seed(42)
+    random.seed(int(base_price) % 1000)
     candles = []
     p = base_price
+    volatility = 0.003 if base_price > 1000 else 0.005
     for i in range(limit):
-        change = random.uniform(-0.008, 0.008)
+        change = random.uniform(-volatility, volatility)
         o = p
         c_price = p * (1 + change)
-        h = max(o, c_price) * (1 + random.uniform(0, 0.004))
-        l = min(o, c_price) * (1 - random.uniform(0, 0.004))
+        h = max(o, c_price) * (1 + random.uniform(0, volatility/2))
+        l = min(o, c_price) * (1 - random.uniform(0, volatility/2))
         vol = random.uniform(100, 1000)
         candles.append({
-            "open": str(round(o, 2)), "high": str(round(h, 2)),
-            "low": str(round(l, 2)), "close": str(round(c_price, 2)),
+            "open": str(round(o, 4)), "high": str(round(h, 4)),
+            "low": str(round(l, 4)), "close": str(round(c_price, 4)),
             "volume": str(round(vol, 2)),
         })
         p = c_price
