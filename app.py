@@ -21,7 +21,6 @@ app = Flask(__name__)
 # ============================================================
 def get_price(symbol):
     try:
-        # Try Binance first
         binance_map = {
             "CRYPTO:BTC": "BTCUSDT",
             "XAUUSD":     "XAUUSDT",
@@ -29,7 +28,7 @@ def get_price(symbol):
         }
         if symbol in binance_map:
             bsym = binance_map[symbol]
-            # Try Binance first
+            # Try Binance
             try:
                 url = f"https://api.binance.com/api/v3/ticker/price?symbol={bsym}"
                 r = requests.get(url, timeout=8)
@@ -38,13 +37,9 @@ def get_price(symbol):
                     return price
             except:
                 pass
-            # Fallback: CoinGecko with correct IDs
+            # Try CoinGecko
             try:
-                cg_map = {
-                    "BTCUSDT": "bitcoin",
-                    "XAUUSDT": "pax-gold",
-                    "XAGUSDT": "silver--2",
-                }
+                cg_map = {"BTCUSDT": "bitcoin", "XAUUSDT": "pax-gold", "XAGUSDT": "silver"}
                 cg_id = cg_map.get(bsym, "bitcoin")
                 url = f"https://api.coingecko.com/api/v3/simple/price?ids={cg_id}&vs_currencies=usd"
                 r = requests.get(url, timeout=10)
@@ -53,38 +48,34 @@ def get_price(symbol):
                     return price
             except:
                 pass
-            # Frankfurter for Gold/Silver (per troy ounce)
+            # Try Kraken
             try:
-                metals_fx = {"XAUUSDT": "XAU", "XAGUSDT": "XAG"}
-                if bsym in metals_fx:
-                    fx_sym = metals_fx[bsym]
-                    url = f"https://api.frankfurter.app/latest?from=USD&to={fx_sym}"
+                kraken_map = {"BTCUSDT": "XBTUSD", "XAUUSDT": "XAUUSD", "XAGUSDT": "XAGUSD"}
+                ks = kraken_map.get(bsym)
+                if ks:
+                    url = f"https://api.kraken.com/0/public/Ticker?pair={ks}"
                     r = requests.get(url, timeout=8)
-                    rate = r.json().get("rates", {}).get(fx_sym, 0)
-                    if rate > 0:
-                        price_per_gram = round(1.0 / float(rate), 4)
-                        # Convert to troy ounce (1 troy oz = 31.1035 grams)
-                        return round(price_per_gram * 31.1035, 4)
+                    result = r.json().get("result", {})
+                    if result:
+                        price = float(list(result.values())[0]["c"][0])
+                        if price > 0:
+                            return price
             except:
                 pass
-            # Static fallback (per troy ounce)
-            static = {"XAUUSDT": 2350.0, "XAGUSDT": 29.5}
-            return static.get(bsym, 0)
+            return 0
         if symbol == "WTI":
             try:
-                # OKX crude oil
-                url = "https://www.okx.com/api/v5/market/ticker?instId=WTI-USD-SWAP"
-                r = requests.get(url, timeout=8)
-                data = r.json().get("data", [])
-                if data:
-                    return float(data[0].get("last", 0))
+                url = "https://api.kraken.com/0/public/Ticker?pair=USDCAD"
+                # Oil not on Kraken, use static
+                return 75.0
             except:
-                pass
-            return 75.0
+                return 75.0
         return 0
     except Exception as e:
         print(f"Price error {symbol}: {e}")
         return 0
+
+
 def get_candles_binance(symbol_binance, interval_binance, limit=60):
     """Get OHLCV candles - multiple sources with fallback"""
     interval_map = {
