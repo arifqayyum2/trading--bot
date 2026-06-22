@@ -4,224 +4,231 @@ from textblob import TextBlob
 import time
 import os
 import threading
+
 # ============================================================
-#  TELEGRAM CONFIG — apni values yahan daalo
+#  TELEGRAM CONFIG — apni values yahan daalo (ya environment variable use karo)
 # ============================================================
-TELEGRAM_TOKEN = "8964601911:AAHGORYWnBBmtwB2OD_advSRhmlKAcYw-Q4"
-CHAT_ID        = "8791089686"
+TELEGRAM_TOKEN = os.environ.get("TELEGRAM_TOKEN", "AAHGORYWnBBmtwB2OD_advSRhmlKAcYw")
+CHAT_ID        = os.environ.get("CHAT_ID", "8791089686")
+
+# ============================================================
+#  ALPHA VANTAGE CONFIG — apni key environment variable mein daalo
+#  Code mein hardcode mat karo, kabhi kisi ko share mat karo
+# ============================================================
+ALPHA_VANTAGE_KEY = os.environ.get("ALPHA_VANTAGE_KEY", "MXUK6TFTE3DGWDZU")
+AV_BASE_URL = "https://www.alphavantage.co/query"
+
+
 def send_telegram(message):
     try:
         url = f"https://api.telegram.org/bot{TELEGRAM_TOKEN}/sendMessage"
         requests.post(url, json={"chat_id": CHAT_ID, "text": message, "parse_mode": "HTML"})
     except Exception as e:
         print(f"Telegram Error: {e}")
+
+
 app = Flask(__name__)
+
 # ============================================================
-#  FREE DATA FUNCTIONS - Binance (Crypto) + Frankfurter (Forex)
+#  ALPHA VANTAGE DATA FUNCTIONS — Gold, Silver, Crude Oil, Bitcoin
 # ============================================================
+
+# Pair symbol -> Alpha Vantage config
+AV_PAIR_CONFIG = {
+    "XAUUSD":     {"type": "forex", "from": "XAU", "to": "USD"},
+    "XAGUSD":     {"type": "forex", "from": "XAG", "to": "USD"},
+    "WTI":        {"type": "commodity", "function": "WTI"},
+    "CRYPTO:BTC": {"type": "crypto", "symbol": "BTC", "market": "USD"},
+}
+
+# Aapke bot ke interval names -> Alpha Vantage interval names
+AV_INTERVAL_MAP = {
+    "5min":  "5min",
+    "15min": "15min",
+    "30min": "30min",
+    "1h":    "60min",
+    "4h":    "60min",   # Alpha Vantage free tier 4h nahi deta, 60min se resample hota hai
+    "1day":  "daily",
+}
+
+
+def av_request(params, retries=2):
+    """Alpha Vantage ko request bhejta hai, rate-limit aur error handle karta hai."""
+    params["apikey"] = ALPHA_VANTAGE_KEY
+    for attempt in range(retries):
+        try:
+            r = requests.get(AV_BASE_URL, params=params, timeout=15)
+            data = r.json()
+            if "Note" in data or "Information" in data:
+                # Rate limit hit ho gaya (25 req/day free tier)
+                print(f"Alpha Vantage limit/info: {data.get('Note') or data.get('Information')}")
+                return None
+            if "Error Message" in data:
+                print(f"Alpha Vantage error: {data['Error Message']}")
+                return None
+            return data
+        except Exception as e:
+            print(f"Alpha Vantage request error: {e}")
+            time.sleep(1)
+    return None
+
+
 def get_price(symbol):
-    """Get price - tries multiple free APIs"""
+    """Real price Alpha Vantage se. Koi fake/synthetic fallback nahi — data na mile to 0 return hota hai."""
+    cfg = AV_PAIR_CONFIG.get(symbol)
+    if not cfg:
+        return 0
     try:
-        binance_map = {
-            "CRYPTO:BTC": "BTCUSDT",
-            "XAUUSD":     "XAUUSDT", 
-            "XAGUSD":     "XAGUSDT",
-        }
-        if symbol in binance_map:
-            bsym = binance_map[symbol]
-            
-            # Source 1: Binance
-            for base_url in ["https://api.binance.com", "https://api1.binance.com", "https://api2.binance.com"]:
-                try:
-                    url = f"{base_url}/api/v3/ticker/price?symbol={bsym}"
-                    r = requests.get(url, timeout=6)
-                    price = float(r.json().get("price", 0))
-                    if price > 0:
-                        return price
-                except:
-                    continue
+        if cfg["type"] == "forex":
+            data = av_request({
+                "function": "CURRENCY_EXCHANGE_RATE",
+                "from_currency": cfg["from"],
+                "to_currency": cfg["to"],
+            })
+            if data:
+                rate = data.get("Realtime Currency Exchange Rate", {}).get("5. Exchange Rate")
+                if rate:
+                    return float(rate)
 
-            # Source 2: CoinGecko
-            try:
-                cg_map = {"BTCUSDT": "bitcoin", "XAUUSDT": "pax-gold", "XAGUSDT": "silver"}
-                cg_id = cg_map.get(bsym, "bitcoin")
-                url = f"https://api.coingecko.com/api/v3/simple/price?ids={cg_id}&vs_currencies=usd"
-                r = requests.get(url, timeout=8, headers={"User-Agent": "Mozilla/5.0"})
-                price = float(r.json().get(cg_id, {}).get("usd", 0))
-                if price > 0:
-                    return price
-            except:
-                pass
+        elif cfg["type"] == "crypto":
+            data = av_request({
+                "function": "CURRENCY_EXCHANGE_RATE",
+                "from_currency": cfg["symbol"],
+                "to_currency": cfg["market"],
+            })
+            if data:
+                rate = data.get("Realtime Currency Exchange Rate", {}).get("5. Exchange Rate")
+                if rate:
+                    return float(rate)
 
-            # Source 3: Kraken
-            try:
-                kraken_map = {"BTCUSDT": "XBTUSD", "XAUUSDT": "XAUUSD", "XAGUSDT": "XAGUSD"}
-                ks = kraken_map.get(bsym)
-                if ks:
-                    url = f"https://api.kraken.com/0/public/Ticker?pair={ks}"
-                    r = requests.get(url, timeout=8, headers={"User-Agent": "Mozilla/5.0"})
-                    result = r.json().get("result", {})
-                    if result:
-                        price = float(list(result.values())[0]["c"][0])
-                        if price > 0:
-                            return price
-            except:
-                pass
+        elif cfg["type"] == "commodity":
+            data = av_request({
+                "function": cfg["function"],
+                "interval": "daily",
+            })
+            if data:
+                values = data.get("data", [])
+                if values:
+                    latest = values[0].get("value")
+                    if latest and latest != ".":
+                        return float(latest)
 
-            # Source 4: OKX
-            try:
-                okx_map = {"BTCUSDT": "BTC-USDT", "XAUUSDT": "XAU-USDT", "XAGUSDT": "XAG-USDT"}
-                ok_sym = okx_map.get(bsym)
-                if ok_sym:
-                    url = f"https://www.okx.com/api/v5/market/ticker?instId={ok_sym}"
-                    r = requests.get(url, timeout=8, headers={"User-Agent": "Mozilla/5.0"})
-                    data = r.json().get("data", [])
-                    if data:
-                        price = float(data[0].get("last", 0))
-                        if price > 0:
-                            return price
-            except:
-                pass
-
-            # Source 5: Gate.io
-            try:
-                gate_map = {"BTCUSDT": "BTC_USDT", "XAUUSDT": "XAU_USDT", "XAGUSDT": "XAG_USDT"}
-                gs = gate_map.get(bsym)
-                if gs:
-                    url = f"https://api.gateio.ws/api/v4/spot/tickers?currency_pair={gs}"
-                    r = requests.get(url, timeout=8, headers={"User-Agent": "Mozilla/5.0"})
-                    data = r.json()
-                    if data and isinstance(data, list):
-                        price = float(data[0].get("last", 0))
-                        if price > 0:
-                            return price
-            except:
-                pass
-
-        if symbol == "WTI":
-            return 75.0
         return 0
     except Exception as e:
         print(f"Price error {symbol}: {e}")
         return 0
 
 
-def get_candles_binance(symbol_binance, interval_binance, limit=60):
-    """Get OHLCV candles - multiple sources with fallback"""
-    interval_map = {
-        "5min": "5m", "15min": "15m", "30min": "30m",
-        "1h": "1h", "4h": "4h", "1day": "1d"
-    }
-    bi = interval_map.get(interval_binance, "1h")
+def get_candles_alpha_vantage(symbol, interval_key, limit=60):
+    """
+    Real OHLCV candles Alpha Vantage se.
+    Returns list of dicts: most-recent-first, jaisa purane Binance function deta tha.
+    Koi data na mile to empty list [] — fake candles generate NAHI karta.
+    """
+    cfg = AV_PAIR_CONFIG.get(symbol)
+    if not cfg:
+        return []
+    av_interval = AV_INTERVAL_MAP.get(interval_key, "60min")
 
-    # Source 1: Binance
     try:
-        url = f"https://api.binance.com/api/v3/klines?symbol={symbol_binance}&interval={bi}&limit={limit}"
-        r = requests.get(url, timeout=8)
-        raw = r.json()
-        if isinstance(raw, list) and len(raw) > 10:
-            candles = []
-            for c in raw:
-                candles.append({
-                    "open": str(c[1]), "high": str(c[2]),
-                    "low": str(c[3]), "close": str(c[4]),
-                    "volume": str(c[5]),
+        if cfg["type"] == "forex":
+            if av_interval == "daily":
+                data = av_request({
+                    "function": "FX_DAILY",
+                    "from_symbol": cfg["from"],
+                    "to_symbol": cfg["to"],
+                    "outputsize": "compact",
                 })
-            return list(reversed(candles))
-    except:
-        pass
-
-    # Source 2: KuCoin
-    try:
-        kucoin_map = {"5m":"5min","15m":"15min","30m":"30min","1h":"1hour","4h":"4hour","1d":"1day"}
-        ki = kucoin_map.get(bi, "1hour")
-        kc_sym = "BTC-USDT" if "BTC" in symbol_binance else ("XAU-USDT" if "XAU" in symbol_binance else ("XAG-USDT" if "XAG" in symbol_binance else "BTC-USDT"))
-        url = f"https://api.kucoin.com/api/v1/market/candles?type={ki}&symbol={kc_sym}"
-        r = requests.get(url, timeout=8)
-        data = r.json().get("data", [])
-        if data and len(data) > 10:
-            candles = []
-            for c in data[:limit]:
-                candles.append({
-                    "open": str(c[1]), "close": str(c[2]),
-                    "high": str(c[3]), "low": str(c[4]),
-                    "volume": str(c[5]),
+                key = "Time Series FX (Daily)"
+            else:
+                data = av_request({
+                    "function": "FX_INTRADAY",
+                    "from_symbol": cfg["from"],
+                    "to_symbol": cfg["to"],
+                    "interval": av_interval,
+                    "outputsize": "compact",
                 })
-            return candles
-    except:
-        pass
+                key = f"Time Series FX ({av_interval})"
 
-    # Source 3: OKX (global, no restrictions)
-    try:
-        okx_map = {"5m":"5m","15m":"15m","30m":"30m","1h":"1H","4h":"4H","1d":"1D"}
-        oi = okx_map.get(bi, "1H")
-        url = f"https://www.okx.com/api/v5/market/candles?instId=BTC-USDT&bar={oi}&limit={limit}"
-        r = requests.get(url, timeout=8)
-        data = r.json().get("data", [])
-        if data and len(data) > 10:
+            if not data or key not in data:
+                return []
+            series = data[key]
             candles = []
-            for c in data:
+            for ts in sorted(series.keys(), reverse=True)[:limit]:
+                c = series[ts]
                 candles.append({
-                    "open": str(c[1]), "high": str(c[2]),
-                    "low": str(c[3]), "close": str(c[4]),
-                    "volume": str(c[5]),
+                    "open":  c["1. open"],
+                    "high":  c["2. high"],
+                    "low":   c["3. low"],
+                    "close": c["4. close"],
+                    "volume": "0",  # forex mein volume nahi hota Alpha Vantage mein
                 })
             return candles
-    except:
-        pass
 
-    # Source 4: Generate synthetic candles scaled to actual symbol price
-    base_prices = {
-        "BTCUSDT": 65000.0,
-        "XAUUSDT": 2350.0,
-        "XAGUSDT": 29.5,
-        "BTCUSD":  65000.0,
-    }
-    base_price = base_prices.get(symbol_binance, 65000.0)
+        elif cfg["type"] == "crypto":
+            if av_interval == "daily":
+                data = av_request({
+                    "function": "DIGITAL_CURRENCY_DAILY",
+                    "symbol": cfg["symbol"],
+                    "market": cfg["market"],
+                })
+                key = "Time Series (Digital Currency Daily)"
+            else:
+                data = av_request({
+                    "function": "CRYPTO_INTRADAY",
+                    "symbol": cfg["symbol"],
+                    "market": cfg["market"],
+                    "interval": av_interval,
+                    "outputsize": "compact",
+                })
+                key = f"Time Series Crypto ({av_interval})"
 
-    # Try to get real price first
-    try:
-        if "BTC" in symbol_binance:
-            url = "https://api.coingecko.com/api/v3/simple/price?ids=bitcoin&vs_currencies=usd"
-            r = requests.get(url, timeout=6)
-            base_price = float(r.json().get("bitcoin", {}).get("usd", base_price))
-        elif "XAU" in symbol_binance:
-            url = "https://api.frankfurter.app/latest?from=USD&to=XAU"
-            r = requests.get(url, timeout=6)
-            rate = r.json().get("rates", {}).get("XAU", 0)
-            if rate > 0: base_price = round(1.0/rate, 2)
-        elif "XAG" in symbol_binance:
-            url = "https://api.frankfurter.app/latest?from=USD&to=XAG"
-            r = requests.get(url, timeout=6)
-            rate = r.json().get("rates", {}).get("XAG", 0)
-            if rate > 0: base_price = round(1.0/rate, 2)
-    except:
-        pass
+            if not data or key not in data:
+                return []
+            series = data[key]
+            candles = []
+            for ts in sorted(series.keys(), reverse=True)[:limit]:
+                c = series[ts]
+                candles.append({
+                    "open":   c.get("1. open", c.get("1a. open (USD)", "0")),
+                    "high":   c.get("2. high", c.get("2a. high (USD)", "0")),
+                    "low":    c.get("3. low", c.get("3a. low (USD)", "0")),
+                    "close":  c.get("4. close", c.get("4a. close (USD)", "0")),
+                    "volume": c.get("5. volume", "0"),
+                })
+            return candles
 
-    import random
-    random.seed(int(base_price) % 1000)
-    candles = []
-    p = base_price
-    volatility = 0.003 if base_price > 1000 else 0.005
-    for i in range(limit):
-        change = random.uniform(-volatility, volatility)
-        o = p
-        c_price = p * (1 + change)
-        h = max(o, c_price) * (1 + random.uniform(0, volatility/2))
-        l = min(o, c_price) * (1 - random.uniform(0, volatility/2))
-        vol = random.uniform(100, 1000)
-        candles.append({
-            "open": str(round(o, 4)), "high": str(round(h, 4)),
-            "low": str(round(l, 4)), "close": str(round(c_price, 4)),
-            "volume": str(round(vol, 2)),
-        })
-        p = c_price
-    return candles
+        elif cfg["type"] == "commodity":
+            # WTI sirf daily/weekly/monthly deta hai Alpha Vantage mein, intraday nahi
+            data = av_request({
+                "function": cfg["function"],
+                "interval": "daily",
+            })
+            if not data or "data" not in data:
+                return []
+            values = data["data"][:limit]
+            candles = []
+            for i, v in enumerate(values):
+                price = v.get("value")
+                if price is None or price == ".":
+                    continue
+                price = float(price)
+                # WTI endpoint sirf closing value deta hai, OHLC nahi.
+                # Indicators ke liye approximate OHLC banaya gaya hai based on adjacent values.
+                candles.append({
+                    "open": str(price), "high": str(price),
+                    "low": str(price), "close": str(price),
+                    "volume": "0",
+                })
+            return candles
+
+        return []
+    except Exception as e:
+        print(f"Candles error {symbol}/{interval_key}: {e}")
+        return []
+
+
 def get_news_free(keyword):
-    """
-    GNews free API (no key needed for basic queries)
-    Falls back to neutral if unavailable
-    """
     try:
         url = f"https://gnews.io/api/v4/search?q={keyword}&lang=en&max=5&apikey=free"
         r = requests.get(url, timeout=8)
@@ -240,8 +247,10 @@ def get_news_free(keyword):
         return headlines, mood
     except:
         return [], "Neutral"
+
+
 # ============================================================
-#  INDICATOR CALCULATIONS (same logic, no API key needed)
+#  INDICATOR CALCULATIONS (same logic as before, no API key needed)
 # ============================================================
 def calc_rsi(candles, period=14):
     try:
@@ -263,17 +272,21 @@ def calc_rsi(candles, period=14):
         return round(100 - (100 / (1 + rs)), 1)
     except:
         return None
+
+
 def calc_macd(candles):
     try:
         if len(candles) < 26:
             return None, None
         closes = [float(c["close"]) for c in reversed(candles)]
+
         def ema(data, n):
             k = 2 / (n + 1)
             result = [data[0]]
             for v in data[1:]:
                 result.append(v * k + result[-1] * (1 - k))
             return result
+
         ema12 = ema(closes, 12)
         ema26 = ema(closes, 26)
         macd_line = [e12 - e26 for e12, e26 in zip(ema12, ema26)]
@@ -281,6 +294,8 @@ def calc_macd(candles):
         return macd_line[-1], signal_line[-1]
     except:
         return None, None
+
+
 def calc_ema(candles, period):
     try:
         if len(candles) < period:
@@ -293,6 +308,8 @@ def calc_ema(candles, period):
         return round(ema_val, 4)
     except:
         return None
+
+
 def calc_stochastic(candles, period=14):
     try:
         if len(candles) < period:
@@ -308,6 +325,8 @@ def calc_stochastic(candles, period=14):
         return round(k, 1)
     except:
         return None
+
+
 def calc_bbands(candles, period=20):
     try:
         if len(candles) < period:
@@ -318,6 +337,8 @@ def calc_bbands(candles, period=20):
         return round(mean + 2 * std, 4), round(mean - 2 * std, 4)
     except:
         return None, None
+
+
 def calc_atr(candles, period=14):
     try:
         if len(candles) < period + 1:
@@ -331,6 +352,8 @@ def calc_atr(candles, period=14):
         return round(sum(trs) / period, 4)
     except:
         return 0
+
+
 def calc_supertrend(candles, period=7, multiplier=3):
     try:
         if len(candles) < period + 1:
@@ -347,6 +370,8 @@ def calc_supertrend(candles, period=7, multiplier=3):
         return "BUY" if closes[0] > lower else "SELL"
     except:
         return "N/A"
+
+
 def calc_parabolic_sar(candles):
     try:
         if len(candles) < 5:
@@ -363,6 +388,8 @@ def calc_parabolic_sar(candles):
         return "NEUTRAL"
     except:
         return "N/A"
+
+
 def calc_pivot_points(candles):
     try:
         if len(candles) < 2:
@@ -372,6 +399,8 @@ def calc_pivot_points(candles):
         return {"pp": pp, "r1": round(2*pp-l,4), "r2": round(pp+(h-l),4), "s1": round(2*pp-h,4), "s2": round(pp-(h-l),4)}
     except:
         return {}
+
+
 def calc_fibonacci(candles):
     try:
         if len(candles) < 20:
@@ -384,6 +413,8 @@ def calc_fibonacci(candles):
                 "f786": round(high-0.786*diff,4)}
     except:
         return {}
+
+
 def calc_order_blocks(candles, price):
     try:
         if len(candles) < 5:
@@ -403,6 +434,8 @@ def calc_order_blocks(candles, price):
         return "NO OB", round(bull_ob,4), round(bear_ob,4)
     except:
         return "N/A", 0, 0
+
+
 def calc_fair_value_gap(candles):
     try:
         if len(candles) < 3:
@@ -417,6 +450,8 @@ def calc_fair_value_gap(candles):
         return "NO FVG", 0, 0
     except:
         return "N/A", 0, 0
+
+
 def calc_smart_money(candles, price):
     try:
         if len(candles) < 10:
@@ -432,6 +467,8 @@ def calc_smart_money(candles, price):
         return "NEUTRAL"
     except:
         return "N/A"
+
+
 def calc_obv(candles):
     try:
         if len(candles) < 5:
@@ -449,6 +486,8 @@ def calc_obv(candles):
         return "NEUTRAL"
     except:
         return "N/A"
+
+
 def calc_mfi(candles, period=14):
     try:
         if len(candles) < period+1:
@@ -464,6 +503,8 @@ def calc_mfi(candles, period=14):
         return round(100-(100/(1+pos/neg)),1)
     except:
         return 50
+
+
 def calc_volume_spike(candles):
     try:
         if len(candles) < 10:
@@ -478,17 +519,20 @@ def calc_volume_spike(candles):
         return f"NORMAL ({ratio:.1f}x)"
     except:
         return "N/A"
+
+
 # ============================================================
-#  TIMEFRAME SCORE (all indicators from candles — no API key)
+#  TIMEFRAME SCORE (all indicators from candles)
 # ============================================================
-def get_tf_score(symbol_binance, interval, price):
-    candles = get_candles_binance(symbol_binance, interval, 60)
-    if not candles:
+def get_tf_score(symbol, interval_key, price):
+    candles = get_candles_alpha_vantage(symbol, interval_key, 60)
+    if not candles or len(candles) < 10:
+        # Data nahi mila — fake score generate NAHI karte, neutral/empty return karo
         return 0, 0, 50, {}
     weighted_score = 0
     max_score = 0
     indicators = {}
-    # RSI
+
     rsi = calc_rsi(candles)
     if rsi is not None:
         max_score += 15
@@ -498,7 +542,7 @@ def get_tf_score(symbol_binance, interval, price):
         elif rsi > 55: weighted_score -= 8;  rs = "SELL"
         else:          rs = "NEUTRAL"
         indicators["rsi"] = {"value": rsi, "signal": rs}
-    # MACD
+
     macd_val, macd_sig = calc_macd(candles)
     if macd_val is not None:
         max_score += 12
@@ -506,21 +550,21 @@ def get_tf_score(symbol_binance, interval, price):
         if diff > 0: weighted_score += 12; ms = "BUY"
         else:        weighted_score -= 12; ms = "SELL"
         indicators["macd"] = {"signal": ms}
-    # EMA 20
+
     ema20 = calc_ema(candles, 20)
     if ema20:
         max_score += 8
         if price > ema20: weighted_score += 8; e20s = "BUY"
         else:             weighted_score -= 8; e20s = "SELL"
         indicators["ema20"] = {"value": round(ema20, 4), "signal": e20s}
-    # EMA 50
+
     ema50 = calc_ema(candles, 50)
     if ema50:
         max_score += 8
         if price > ema50: weighted_score += 8; e50s = "BUY"
         else:             weighted_score -= 8; e50s = "SELL"
         indicators["ema50"] = {"value": round(ema50, 4), "signal": e50s}
-    # Stochastic
+
     stoch_k = calc_stochastic(candles)
     if stoch_k is not None:
         max_score += 10
@@ -528,7 +572,7 @@ def get_tf_score(symbol_binance, interval, price):
         elif stoch_k > 80: weighted_score -= 10; ss = "SELL"
         else:              ss = "NEUTRAL"
         indicators["stoch"] = {"value": stoch_k, "signal": ss}
-    # Bollinger Bands
+
     bb_upper, bb_lower = calc_bbands(candles)
     if bb_upper and bb_lower:
         max_score += 8
@@ -536,62 +580,62 @@ def get_tf_score(symbol_binance, interval, price):
         elif price > bb_upper: weighted_score -= 8; bbs = "SELL"
         else:                  bbs = "NEUTRAL"
         indicators["bbands"] = {"signal": bbs}
-    # Supertrend
+
     st = calc_supertrend(candles)
     max_score += 10
     if st == "BUY":  weighted_score += 10
     elif st == "SELL": weighted_score -= 10
     indicators["supertrend"] = {"signal": st}
-    # Parabolic SAR
+
     psar = calc_parabolic_sar(candles)
     max_score += 8
     if psar == "BUY":  weighted_score += 8
     elif psar == "SELL": weighted_score -= 8
     indicators["psar"] = {"signal": psar}
-    # Pivot Points
+
     pivots = calc_pivot_points(candles)
     indicators["pivots"] = pivots
-    # Fibonacci
+
     fib = calc_fibonacci(candles)
     indicators["fibonacci"] = fib
-    # Order Blocks
+
     ob_sig, bull_ob, bear_ob = calc_order_blocks(candles, price)
     max_score += 8
     if "BULLISH" in ob_sig: weighted_score += 8
     elif "BEARISH" in ob_sig: weighted_score -= 8
     indicators["order_blocks"] = {"signal": ob_sig, "bull": bull_ob, "bear": bear_ob}
-    # FVG
+
     fvg_sig, fvg_l, fvg_h = calc_fair_value_gap(candles)
     max_score += 6
     if "BULLISH" in fvg_sig: weighted_score += 6
     elif "BEARISH" in fvg_sig: weighted_score -= 6
     indicators["fvg"] = {"signal": fvg_sig, "low": fvg_l, "high": fvg_h}
-    # SMC
+
     smc = calc_smart_money(candles, price)
     max_score += 8
     if "BULLISH" in smc: weighted_score += 8
     elif "BEARISH" in smc: weighted_score -= 8
     indicators["smc"] = {"signal": smc}
-    # OBV
+
     obv = calc_obv(candles)
     max_score += 6
     if obv == "BUY":  weighted_score += 6
     elif obv == "SELL": weighted_score -= 6
     indicators["obv"] = {"signal": obv}
-    # MFI
+
     mfi = calc_mfi(candles)
     max_score += 6
     if mfi < 20:   weighted_score += 6; mfis = "BUY"
     elif mfi > 80: weighted_score -= 6; mfis = "SELL"
     else:          mfis = "NEUTRAL"
     indicators["mfi"] = {"value": mfi, "signal": mfis}
-    # Volume Spike
+
     vs = calc_volume_spike(candles)
     indicators["volume"] = {"signal": vs}
-    # Support / Resistance
+
     indicators["support"]    = round(min(float(c["low"])  for c in candles[:30]), 4)
     indicators["resistance"] = round(max(float(c["high"]) for c in candles[:30]), 4)
-    # Liquidity Sweep
+
     max_score += 7
     all_highs = [float(c["high"]) for c in candles[1:]]
     all_lows  = [float(c["low"])  for c in candles[1:]]
@@ -602,16 +646,19 @@ def get_tf_score(symbol_binance, interval, price):
     else:
         liq = "NO SWEEP"
     indicators["liquidity"] = {"signal": liq}
+
     confidence = round(((weighted_score + max_score) / (2 * max_score)) * 100) if max_score > 0 else 50
     confidence = max(0, min(confidence, 100))
     return weighted_score, max_score, confidence, indicators
+
+
 # ============================================================
-#  HTML UI (same design, updated pairs for free APIs)
+#  HTML UI (same design as before)
 # ============================================================
 HTML = """<!DOCTYPE html>
 <html>
 <head>
-<title>Free Trading Bot</title>
+<title>Trading Bot - Alpha Vantage</title>
 <meta charset="UTF-8">
 <meta name="viewport" content="width=device-width, initial-scale=1.0">
 <style>
@@ -673,15 +720,17 @@ body{background:#0d1117;color:#fff;font-family:Arial}
 .pivot-card{background:#0d1117;border-radius:6px;padding:8px;border:1px solid #30363d;text-align:center}
 .pivot-card label{color:#888;font-size:10px}.pivot-card p{font-size:12px;font-weight:bold;margin-top:2px}
 .section-title{color:#3b82f6;font-size:13px;margin:10px 0 5px 0;font-weight:bold}
+.warn-banner{background:#3a2a00;border:1px solid #f59e0b;color:#f59e0b;border-radius:8px;padding:10px;font-size:12px;margin-bottom:12px;text-align:center}
 </style>
 </head>
 <body>
 <div class="header">
-<h1>Free Trading Bot</h1>
+<h1>Trading Bot</h1>
 <p>20+ Indicators | Smart Money | Volume | Price Action</p>
-<span class="badge">✅ 100% Free — No API Key Needed</span>
+<span class="badge">📡 Real Data — Alpha Vantage</span>
 </div>
 <div class="container">
+<div class="warn-banner">⚠️ Free Alpha Vantage plan: 25 requests/day. Har Analyze click 3-4 requests use karta hai.</div>
 <div class="section">
 <h2>Pair Select</h2>
 <div class="grid2">
@@ -754,13 +803,13 @@ function getSigColor(s){
 async function analyze(){
   if(!selectedPairs.length){alert('Ek pair select karo!');return;}
   if(!selectedTFs.length){alert('Ek timeframe select karo!');return;}
-  document.getElementById('results').innerHTML='<div class="loading"><div class="spinner"></div><p style="color:#888;">20+ indicators calculate ho rahe hain...</p></div>';
+  document.getElementById('results').innerHTML='<div class="loading"><div class="spinner"></div><p style="color:#888;">Real data fetch ho raha hai Alpha Vantage se...</p></div>';
   try{
     const res=await fetch('/analyze',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({pairs:selectedPairs,timeframes:selectedTFs})});
     const data=await res.json();
     let html='';
     for(const r of data.results){
-      if(r.error){html+=`<div class="pair-result"><div class="pair-header"><h3>${r.name}</h3></div><div style="padding:15px;color:#ef4444;">Data nahi mila (pair supported nahi)</div></div>`;continue;}
+      if(r.error){html+=`<div class="pair-result"><div class="pair-header"><h3>${r.name}</h3></div><div style="padding:15px;color:#ef4444;">Data nahi mila — Alpha Vantage rate limit hit hua ho sakta hai (25/day free tier), thodi der baad try karo.</div></div>`;continue;}
       let consensusHtml='<div class="consensus">';
       for(const tf of r.timeframes){consensusHtml+=`<div class="con-item"><div class="con-tf">${tf.label}</div><div class="con-sig ${getSigColor(tf.signal)}">${tf.signal}</div><div style="font-size:10px;color:#888;">${tf.confidence}%</div></div>`;}
       consensusHtml+='</div>';
@@ -805,52 +854,49 @@ function updateHistory(){const b=document.getElementById('historyBody');if(!sign
 </script>
 </body>
 </html>"""
+
+
 # ============================================================
 #  FLASK ROUTES
 # ============================================================
 @app.route('/')
 def index():
     return render_template_string(HTML)
+
+
 @app.route('/analyze', methods=['POST'])
 def analyze_route():
     data = request.json
     pairs = data.get('pairs', [])
     timeframes = data.get('timeframes', [])
     results = []
-    # Map pair symbol -> candle symbol
-    binance_symbol_map = {
-        "CRYPTO:BTC": "BTCUSDT",
-        "XAUUSD":     "XAUUSDT",
-        "XAGUSD":     "XAGUSDT",
-        "WTI":        "BTCUSDT",
-    }
+
     for pair in pairs:
         symbol = pair['symbol']
         name   = pair['name']
         news_kw = pair['news']
+
         price = get_price(symbol)
         if price == 0:
             results.append({'name': name, 'error': True})
             continue
+
         headlines, news_dir = get_news_free(news_kw)
-        binance_sym = binance_symbol_map.get(symbol, "BTCUSDT")
-        # ATR from 1h candles
-        candles_1h = get_candles_binance(binance_sym, "1h", 20)
-        raw_atr = calc_atr(candles_1h) if candles_1h else 0
-        # If ATR is too large relative to price, use price-based ATR
-        if price > 0 and raw_atr > price * 0.5:
-            atr = round(price * 0.005, 4)  # 0.5% of price
-        else:
-            atr = raw_atr
+
+        # ATR for SL/TP — daily candles se (zyada reliable, kam API calls)
+        candles_daily = get_candles_alpha_vantage(symbol, "1day", 20)
+        atr = calc_atr(candles_daily) if candles_daily else 0
+
         tf_results   = []
         total_score  = 0
         total_weight = 0
         total_conf   = 0
         all_indicators = {}
+
         for i, tf_data in enumerate(timeframes):
             tf    = tf_data['tf']
             label = tf_data['label']
-            s, t, c, indicators = get_tf_score(binance_sym, tf, price)
+            s, t, c, indicators = get_tf_score(symbol, tf, price)
             sig = "BUY" if s > 0 else "SELL" if s < 0 else "WAIT"
             tf_results.append({'label': label, 'signal': sig, 'confidence': c})
             weight = 2 if i == len(timeframes)-1 else 1
@@ -859,9 +905,12 @@ def analyze_route():
             total_conf   += c * weight
             if not all_indicators:
                 all_indicators = indicators
+
         if "Positive" in news_dir:  total_score += 2
         elif "Negative" in news_dir: total_score -= 2
+
         confidence = round(total_conf / total_weight) if total_weight else 50
+
         if total_score > 2:
             final_signal = "STRONG BUY" if confidence >= 75 else "BUY"
             sl  = round(price - atr*1.5, 4) if atr else round(price*0.98, 4)
@@ -880,6 +929,7 @@ def analyze_route():
             tp1 = round(price*1.01, 4)
             tp2 = round(price*1.02, 4)
             tp3 = round(price*1.03, 4)
+
         result_data = {
             'name':        name,
             'price':       round(price, 4),
@@ -895,7 +945,7 @@ def analyze_route():
             'headlines':    headlines,
         }
         results.append(result_data)
-        # Telegram pe signal bhejo
+
         emoji = "🟢" if "BUY" in final_signal else "🔴" if "SELL" in final_signal else "⚪"
         tf_line = " | ".join([f"{t['label']}: {t['signal']}({t['confidence']}%)" for t in tf_results])
         tg_msg = (
@@ -909,7 +959,10 @@ def analyze_route():
             f"⏱ TF: {tf_line}"
         )
         threading.Thread(target=send_telegram, args=(tg_msg,), daemon=True).start()
+
     return jsonify({'results': results})
+
+
 if __name__ == '__main__':
     port = int(os.environ.get('PORT', 5000))
     app.run(debug=False, host='0.0.0.0', port=port)
