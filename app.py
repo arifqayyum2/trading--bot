@@ -35,8 +35,8 @@ app = Flask(__name__)
 
 # Pair symbol -> Alpha Vantage config
 AV_PAIR_CONFIG = {
-    "XAUUSD":     {"type": "forex", "from": "XAU", "to": "USD"},
-    "XAGUSD":     {"type": "forex", "from": "XAG", "to": "USD"},
+    "XAUUSD":     {"type": "metal", "metal": "gold"},
+    "XAGUSD":     {"type": "metal", "metal": "silver"},
     "WTI":        {"type": "commodity", "function": "WTI"},
     "CRYPTO:BTC": {"type": "crypto", "symbol": "BTC", "market": "USD"},
 }
@@ -79,16 +79,22 @@ def get_price(symbol):
     if not cfg:
         return 0
     try:
-        if cfg["type"] == "forex":
-            data = av_request({
-                "function": "CURRENCY_EXCHANGE_RATE",
-                "from_currency": cfg["from"],
-                "to_currency": cfg["to"],
-            })
+        if cfg["type"] == "metal":
+            data = av_request({"function": "GOLD_SILVER_SPOT"})
             if data:
-                rate = data.get("Realtime Currency Exchange Rate", {}).get("5. Exchange Rate")
-                if rate:
-                    return float(rate)
+                # GOLD_SILVER_SPOT response mein "data" list hoti hai jisme gold/silver dono ke entries hote hain
+                values = data.get("data", [])
+                for entry in values:
+                    metal_name = str(entry.get("metal", "")).lower()
+                    if cfg["metal"] in metal_name:
+                        price = entry.get("price") or entry.get("value")
+                        if price and price != ".":
+                            return float(price)
+                # Fallback: agar response format alag aaye (dict ho list ki jagah)
+                if isinstance(values, dict):
+                    price = values.get(cfg["metal"])
+                    if price:
+                        return float(price)
 
         elif cfg["type"] == "crypto":
             data = av_request({
@@ -131,37 +137,29 @@ def get_candles_alpha_vantage(symbol, interval_key, limit=60):
     av_interval = AV_INTERVAL_MAP.get(interval_key, "60min")
 
     try:
-        if cfg["type"] == "forex":
-            if av_interval == "daily":
-                data = av_request({
-                    "function": "FX_DAILY",
-                    "from_symbol": cfg["from"],
-                    "to_symbol": cfg["to"],
-                    "outputsize": "compact",
-                })
-                key = "Time Series FX (Daily)"
-            else:
-                data = av_request({
-                    "function": "FX_INTRADAY",
-                    "from_symbol": cfg["from"],
-                    "to_symbol": cfg["to"],
-                    "interval": av_interval,
-                    "outputsize": "compact",
-                })
-                key = f"Time Series FX ({av_interval})"
-
-            if not data or key not in data:
+        if cfg["type"] == "metal":
+            # GOLD_SILVER_HISTORY sirf daily/weekly/monthly data deta hai, intraday nahi.
+            # Free tier mein Gold/Silver ke liye sab timeframes daily data se calculate honge.
+            data = av_request({
+                "function": "GOLD_SILVER_HISTORY",
+                "interval": "daily",
+            })
+            if not data or "data" not in data:
                 return []
-            series = data[key]
+            values = data["data"][:limit]
             candles = []
-            for ts in sorted(series.keys(), reverse=True)[:limit]:
-                c = series[ts]
+            for v in values:
+                metal_name = str(v.get("metal", "")).lower()
+                if cfg["metal"] not in metal_name:
+                    continue
+                price = v.get("value") or v.get("price")
+                if price is None or price == ".":
+                    continue
+                price = float(price)
                 candles.append({
-                    "open":  c["1. open"],
-                    "high":  c["2. high"],
-                    "low":   c["3. low"],
-                    "close": c["4. close"],
-                    "volume": "0",  # forex mein volume nahi hota Alpha Vantage mein
+                    "open": str(price), "high": str(price),
+                    "low": str(price), "close": str(price),
+                    "volume": "0",
                 })
             return candles
 
