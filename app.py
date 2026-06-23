@@ -4,6 +4,8 @@ from textblob import TextBlob
 import time
 import os
 import threading
+import MetaTrader5 as mt5
+from datetime import datetime
 
 # ============================================================
 #  TELEGRAM CONFIG — apni values yahan daalo (ya environment variable use karo)
@@ -12,11 +14,31 @@ TELEGRAM_TOKEN = os.environ.get("TELEGRAM_TOKEN", "AAHGORYWnBBmtwB2OD_advSRhmlKA
 CHAT_ID        = os.environ.get("CHAT_ID", "8791089686")
 
 # ============================================================
-#  ALPHA VANTAGE CONFIG — apni key environment variable mein daalo
-#  Code mein hardcode mat karo, kabhi kisi ko share mat karo
+#  MT5 CONFIG — VPS ke MT5 terminal mein already login hona chahiye
+#  Yeh script same machine par chalti hai jahan MT5 desktop app khula hai
 # ============================================================
-ALPHA_VANTAGE_KEY = os.environ.get("ALPHA_VANTAGE_KEY", "MXUK6TFTE3DGWDZU")
-AV_BASE_URL = "https://www.alphavantage.co/query"
+MT5_INITIALIZED = mt5.initialize()
+if not MT5_INITIALIZED:
+    print("MT5 initialize FAILED:", mt5.last_error())
+
+# Pair symbol jo bot use karta hai -> MT5 ka actual symbol naam
+# NOTE: agar broker mein naam alag hai (jaise GOLD, BTCUSDT), yahan update karo
+MT5_SYMBOL_MAP = {
+    "XAUUSD":     "XAUUSD",
+    "XAGUSD":     "XAGUSD",
+    "WTI":        "USOIL",
+    "CRYPTO:BTC": "BTCUSD",
+}
+
+# Aapke bot ke interval names -> MT5 timeframe constants
+MT5_TIMEFRAME_MAP = {
+    "5min":  mt5.TIMEFRAME_M5,
+    "15min": mt5.TIMEFRAME_M15,
+    "30min": mt5.TIMEFRAME_M30,
+    "1h":    mt5.TIMEFRAME_H1,
+    "4h":    mt5.TIMEFRAME_H4,
+    "1day":  mt5.TIMEFRAME_D1,
+}
 
 
 def send_telegram(message):
@@ -30,197 +52,66 @@ def send_telegram(message):
 app = Flask(__name__)
 
 # ============================================================
-#  ALPHA VANTAGE DATA FUNCTIONS — Gold, Silver, Crude Oil, Bitcoin
+#  MT5 DATA FUNCTIONS — Gold, Silver, Crude Oil, Bitcoin
+#  Free, unlimited, real-time — seedha MT5 terminal se
 # ============================================================
 
-# Pair symbol -> Alpha Vantage config
-AV_PAIR_CONFIG = {
-    "XAUUSD":     {"type": "metal", "metal": "gold"},
-    "XAGUSD":     {"type": "metal", "metal": "silver"},
-    "WTI":        {"type": "commodity", "function": "WTI"},
-    "CRYPTO:BTC": {"type": "crypto", "symbol": "BTC", "market": "USD"},
-}
-
-# Aapke bot ke interval names -> Alpha Vantage interval names
-AV_INTERVAL_MAP = {
-    "5min":  "5min",
-    "15min": "15min",
-    "30min": "30min",
-    "1h":    "60min",
-    "4h":    "60min",   # Alpha Vantage free tier 4h nahi deta, 60min se resample hota hai
-    "1day":  "daily",
-}
-
-
-def av_request(params, retries=2):
-    """Alpha Vantage ko request bhejta hai, rate-limit aur error handle karta hai."""
-    params["apikey"] = ALPHA_VANTAGE_KEY
-    for attempt in range(retries):
-        try:
-            r = requests.get(AV_BASE_URL, params=params, timeout=15)
-            data = r.json()
-            if "Note" in data or "Information" in data:
-                # Rate limit hit ho gaya (25 req/day free tier)
-                print(f"Alpha Vantage limit/info: {data.get('Note') or data.get('Information')}")
-                return None
-            if "Error Message" in data:
-                print(f"Alpha Vantage error: {data['Error Message']}")
-                return None
-            return data
-        except Exception as e:
-            print(f"Alpha Vantage request error: {e}")
-            time.sleep(1)
-    return None
+def ensure_symbol(mt5_symbol):
+    """Symbol Market Watch mein nahi hai to add karta hai."""
+    info = mt5.symbol_info(mt5_symbol)
+    if info is None:
+        return False
+    if not info.visible:
+        mt5.symbol_select(mt5_symbol, True)
+    return True
 
 
 def get_price(symbol):
-    """Real price Alpha Vantage se. Koi fake/synthetic fallback nahi — data na mile to 0 return hota hai."""
-    cfg = AV_PAIR_CONFIG.get(symbol)
-    if not cfg:
+    """Real price MT5 se. Koi fake/synthetic fallback nahi."""
+    mt5_symbol = MT5_SYMBOL_MAP.get(symbol)
+    if not mt5_symbol:
         return 0
     try:
-        if cfg["type"] == "metal":
-            data = av_request({"function": "GOLD_SILVER_SPOT"})
-            if data:
-                # GOLD_SILVER_SPOT response mein "data" list hoti hai jisme gold/silver dono ke entries hote hain
-                values = data.get("data", [])
-                for entry in values:
-                    metal_name = str(entry.get("metal", "")).lower()
-                    if cfg["metal"] in metal_name:
-                        price = entry.get("price") or entry.get("value")
-                        if price and price != ".":
-                            return float(price)
-                # Fallback: agar response format alag aaye (dict ho list ki jagah)
-                if isinstance(values, dict):
-                    price = values.get(cfg["metal"])
-                    if price:
-                        return float(price)
-
-        elif cfg["type"] == "crypto":
-            data = av_request({
-                "function": "CURRENCY_EXCHANGE_RATE",
-                "from_currency": cfg["symbol"],
-                "to_currency": cfg["market"],
-            })
-            if data:
-                rate = data.get("Realtime Currency Exchange Rate", {}).get("5. Exchange Rate")
-                if rate:
-                    return float(rate)
-
-        elif cfg["type"] == "commodity":
-            data = av_request({
-                "function": cfg["function"],
-                "interval": "daily",
-            })
-            if data:
-                values = data.get("data", [])
-                if values:
-                    latest = values[0].get("value")
-                    if latest and latest != ".":
-                        return float(latest)
-
-        return 0
+        if not ensure_symbol(mt5_symbol):
+            print(f"MT5 symbol not found: {mt5_symbol}")
+            return 0
+        tick = mt5.symbol_info_tick(mt5_symbol)
+        if tick is None:
+            return 0
+        # Bid price use karte hain (current market price)
+        return float(tick.bid)
     except Exception as e:
         print(f"Price error {symbol}: {e}")
         return 0
 
 
-def get_candles_alpha_vantage(symbol, interval_key, limit=60):
+def get_candles_mt5(symbol, interval_key, limit=60):
     """
-    Real OHLCV candles Alpha Vantage se.
-    Returns list of dicts: most-recent-first, jaisa purane Binance function deta tha.
-    Koi data na mile to empty list [] — fake candles generate NAHI karta.
+    Real OHLCV candles MT5 se. Free, unlimited, real-time.
+    Returns list of dicts: most-recent-first, jaisa purane format mein tha.
     """
-    cfg = AV_PAIR_CONFIG.get(symbol)
-    if not cfg:
+    mt5_symbol = MT5_SYMBOL_MAP.get(symbol)
+    if not mt5_symbol:
         return []
-    av_interval = AV_INTERVAL_MAP.get(interval_key, "60min")
+    mt5_tf = MT5_TIMEFRAME_MAP.get(interval_key, mt5.TIMEFRAME_H1)
 
     try:
-        if cfg["type"] == "metal":
-            # GOLD_SILVER_HISTORY sirf daily/weekly/monthly data deta hai, intraday nahi.
-            # Free tier mein Gold/Silver ke liye sab timeframes daily data se calculate honge.
-            data = av_request({
-                "function": "GOLD_SILVER_HISTORY",
-                "interval": "daily",
+        if not ensure_symbol(mt5_symbol):
+            return []
+        rates = mt5.copy_rates_from_pos(mt5_symbol, mt5_tf, 0, limit)
+        if rates is None or len(rates) == 0:
+            return []
+        candles = []
+        # MT5 oldest-first deta hai, humein newest-first chahiye (jaisa purana code expect karta hai)
+        for r in reversed(rates):
+            candles.append({
+                "open":  str(r["open"]),
+                "high":  str(r["high"]),
+                "low":   str(r["low"]),
+                "close": str(r["close"]),
+                "volume": str(r["tick_volume"]),
             })
-            if not data or "data" not in data:
-                return []
-            values = data["data"][:limit]
-            candles = []
-            for v in values:
-                metal_name = str(v.get("metal", "")).lower()
-                if cfg["metal"] not in metal_name:
-                    continue
-                price = v.get("value") or v.get("price")
-                if price is None or price == ".":
-                    continue
-                price = float(price)
-                candles.append({
-                    "open": str(price), "high": str(price),
-                    "low": str(price), "close": str(price),
-                    "volume": "0",
-                })
-            return candles
-
-        elif cfg["type"] == "crypto":
-            if av_interval == "daily":
-                data = av_request({
-                    "function": "DIGITAL_CURRENCY_DAILY",
-                    "symbol": cfg["symbol"],
-                    "market": cfg["market"],
-                })
-                key = "Time Series (Digital Currency Daily)"
-            else:
-                data = av_request({
-                    "function": "CRYPTO_INTRADAY",
-                    "symbol": cfg["symbol"],
-                    "market": cfg["market"],
-                    "interval": av_interval,
-                    "outputsize": "compact",
-                })
-                key = f"Time Series Crypto ({av_interval})"
-
-            if not data or key not in data:
-                return []
-            series = data[key]
-            candles = []
-            for ts in sorted(series.keys(), reverse=True)[:limit]:
-                c = series[ts]
-                candles.append({
-                    "open":   c.get("1. open", c.get("1a. open (USD)", "0")),
-                    "high":   c.get("2. high", c.get("2a. high (USD)", "0")),
-                    "low":    c.get("3. low", c.get("3a. low (USD)", "0")),
-                    "close":  c.get("4. close", c.get("4a. close (USD)", "0")),
-                    "volume": c.get("5. volume", "0"),
-                })
-            return candles
-
-        elif cfg["type"] == "commodity":
-            # WTI sirf daily/weekly/monthly deta hai Alpha Vantage mein, intraday nahi
-            data = av_request({
-                "function": cfg["function"],
-                "interval": "daily",
-            })
-            if not data or "data" not in data:
-                return []
-            values = data["data"][:limit]
-            candles = []
-            for i, v in enumerate(values):
-                price = v.get("value")
-                if price is None or price == ".":
-                    continue
-                price = float(price)
-                # WTI endpoint sirf closing value deta hai, OHLC nahi.
-                # Indicators ke liye approximate OHLC banaya gaya hai based on adjacent values.
-                candles.append({
-                    "open": str(price), "high": str(price),
-                    "low": str(price), "close": str(price),
-                    "volume": "0",
-                })
-            return candles
-
-        return []
+        return candles
     except Exception as e:
         print(f"Candles error {symbol}/{interval_key}: {e}")
         return []
@@ -523,7 +414,7 @@ def calc_volume_spike(candles):
 #  TIMEFRAME SCORE (all indicators from candles)
 # ============================================================
 def get_tf_score(symbol, interval_key, price):
-    candles = get_candles_alpha_vantage(symbol, interval_key, 60)
+    candles = get_candles_mt5(symbol, interval_key, 60)
     if not candles or len(candles) < 10:
         # Data nahi mila — fake score generate NAHI karte, neutral/empty return karo
         return 0, 0, 50, {}
@@ -881,8 +772,8 @@ def analyze_route():
 
         headlines, news_dir = get_news_free(news_kw)
 
-        # ATR for SL/TP — daily candles se (zyada reliable, kam API calls)
-        candles_daily = get_candles_alpha_vantage(symbol, "1day", 20)
+        # ATR for SL/TP — daily candles se MT5 se, free/unlimited
+        candles_daily = get_candles_mt5(symbol, "1day", 20)
         atr = calc_atr(candles_daily) if candles_daily else 0
 
         tf_results   = []
