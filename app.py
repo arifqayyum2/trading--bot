@@ -22,12 +22,12 @@ if not MT5_INITIALIZED:
     print("MT5 initialize FAILED:", mt5.last_error())
 
 # Pair symbol jo bot use karta hai -> MT5 ka actual symbol naam
-# NOTE: agar broker mein naam alag hai (jaise GOLD, BTCUSDT), yahan update karo
+# NOTE: is broker (Exness) mein symbols ke end mein 'm' suffix hai (micro account type)
 MT5_SYMBOL_MAP = {
-    "XAUUSD":     "XAUUSD",
-    "XAGUSD":     "XAGUSD",
-    "WTI":        "USOIL",
-    "CRYPTO:BTC": "BTCUSD",
+    "XAUUSD":     "XAUUSDm",
+    "XAGUSD":     "XAGUSDm",
+    "WTI":        "USOILm",
+    "CRYPTO:BTC": "BTCUSDm",
 }
 
 # Aapke bot ke interval names -> MT5 timeframe constants
